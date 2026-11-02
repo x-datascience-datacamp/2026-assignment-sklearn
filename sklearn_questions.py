@@ -92,7 +92,9 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype
 
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
 
 
@@ -110,6 +112,19 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    @staticmethod
+    def _registration_months(X):
+        registration_month = X["registration_month"]
+        if not is_datetime64_any_dtype(registration_month):
+            raise ValueError(
+                "registration_month column must be of datetime dtype."
+            )
+        if registration_month.isnull().any():
+            raise ValueError(
+                "registration_month column must be of datetime dtype."
+            )
+        return registration_month.dt.to_period("M")
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -129,7 +144,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return len(self._registration_months(X).unique()) - 1
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +167,16 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        months = self._registration_months(X)
+        unique_months = sorted(months.unique())
+        for month in unique_months:
+            train_mask = (months==month).to_numpy()
+            test_mask = (months==month+1).to_numpy()
+            train_idx = X.index[train_mask]
+            test_idx = X.index[test_mask]
+            if len(train_idx) > 0 and len(test_idx) > 0:
+                if y.iloc[train_idx].nunique() == 2 and y.iloc[test_idx].nunique() == 2:
+                    yield train_idx, test_idx
 
 
 # ============================================================
@@ -170,8 +194,31 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    from sklearn.pipeline import Pipeline
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+    from sklearn.impute import SimpleImputer
+
+    pipeline = Pipeline([
+        ("preprocessor", ColumnTransformer(
+            transformers=[
+                ("cat", OneHotEncoder(handle_unknown="ignore"),
+                ["gender", "level"]),
+
+                ("num", Pipeline([
+                    ("imputer", SimpleImputer(strategy="mean")),
+                    ("scaler", StandardScaler())
+                ]), [
+                    "total_events", "rate_songs", "rate_thumbs_up",
+                    "rate_thumbs_down", "rate_errors", "n_sessions",
+                    "has_downgraded", "cancel_initiated"
+                ])
+            ]
+        )),
+        ("classifier", LogisticRegression(solver="liblinear", random_state=42))
+    ])
+
+    return pipeline
 
 
 # ============================================================
