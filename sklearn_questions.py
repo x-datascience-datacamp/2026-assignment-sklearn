@@ -94,7 +94,12 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.compose import make_column_transformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier
+import numpy as np
 
 # ============================================================
 # Question 1
@@ -128,8 +133,12 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "X must contain a 'registration_month' column of datetime dtype."
+            )
+
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +160,29 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "X must contain a 'registration_month' column of datetime dtype."
+            )
+
+        indices = np.arange(len(X))
+        registration_months = X["registration_month"].dt.to_period("M")
+        for month in sorted(registration_months.unique()):
+            next_month = month + 1
+            idx_train = indices[registration_months == month]
+            idx_test = indices[registration_months == next_month]
+
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+
+            if y is not None:
+                y_arr = np.asarray(y)
+                churn_train = y_arr[idx_train]
+                churn_test = y_arr[idx_test]
+                if len(np.unique(churn_train)) < 2 or len(np.unique(churn_test)) < 2:
+                    continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +200,26 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cols_categorical = ["gender", "level"]
+    cols_numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    pipeline = make_pipeline(
+        make_column_transformer(
+            (OneHotEncoder(handle_unknown="ignore"), cols_categorical),
+            (SimpleImputer(strategy="mean"), cols_numerical)
+        ),
+        RandomForestClassifier(random_state=42)
+    )
+
+    return pipeline
 
 
 # ============================================================
