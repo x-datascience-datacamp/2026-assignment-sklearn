@@ -91,9 +91,17 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from pandas.api.types import is_datetime64_any_dtype
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
 
 
 # ============================================================
@@ -110,6 +118,13 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _get_periods(self, X):
+        """Return the registration month of each row as a monthly period."""
+        times = X["registration_month"]
+        if not is_datetime64_any_dtype(times):
+            raise ValueError("registration_month must be of datetime dtype")
+        return times.dt.to_period("M")
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +143,8 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +166,18 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        periods = self._get_periods(X)
+        y = np.asarray(y)
+        for month in sorted(periods.unique()):
+            idx_train = np.where(periods == month)[0]
+            idx_test = np.where(periods == month + 1)[0]
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +195,22 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded",
+    ]
+    preprocessor = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ("num", Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]), numerical),
+    ])
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
