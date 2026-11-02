@@ -91,14 +91,22 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 # ============================================================
 # Question 1
 # ============================================================
+def _has_both_classes(y, idx):
+    """Return True if ``y[idx]`` contains at least one 0 and one 1."""
+    return len(np.unique(y[idx])) == 2
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -129,7 +137,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,12 +160,40 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype.")
+
+        months = X["registration_month"].dt.to_period("M").to_numpy()
+        y = np.asarray(y) if y is not None else None
+
+        for month in sorted(np.unique(months)):
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+
+            if len(idx_test) == 0:
+                continue
+            if y is not None and not (
+                _has_both_classes(y, idx_train)
+                and _has_both_classes(y, idx_test)
+            ):
+                continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
 # Question 2
 # ============================================================
+CATEGORICAL = ["gender", "level"]
+NUMERICAL = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -171,7 +207,27 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    preprocessor = ColumnTransformer(
+        [
+            (
+                "cat",
+                make_pipeline(
+                    SimpleImputer(strategy="most_frequent"),
+                    OneHotEncoder(handle_unknown="ignore"),
+                ),
+                CATEGORICAL,
+            ),
+            ("num", SimpleImputer(strategy="median"), NUMERICAL),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", HistGradientBoostingClassifier(random_state=0)),
+        ]
+    )
 
 
 # ============================================================
