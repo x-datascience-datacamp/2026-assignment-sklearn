@@ -91,9 +91,18 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+import numpy as np
+from pandas.api.types import is_datetime64_any_dtype
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 
 # ============================================================
@@ -129,7 +138,8 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return len(list(self.split(X, y, groups)))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,14 +162,30 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns.tolist():
+            raise ValueError("Invalid data, missing registration_month")
 
+        if not is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("'registration_month' must have a datetime dtype.")
+        X["registration_month"] = pd.to_datetime(X["registration_month"])
+        registration_months = X["registration_month"].dt.to_period("M")
+        for month in registration_months.unique():
+            idx_train = np.flatnonzero(registration_months== month)
+            idx_test = np.flatnonzero(registration_months == month + 1)
+            if (
+                len(idx_train) == 0
+                or len(idx_test) == 0
+                or set(y.iloc[idx_train]) != {0, 1}
+                or set(y.iloc[idx_test]) != {0, 1}
+            ):
+                continue
+            yield idx_train, idx_test
 
 # ============================================================
 # Question 2
 # ============================================================
 
-def get_estimator():
+def get_estimator() -> Pipeline:
     """Return a scikit-learn Pipeline for churn prediction.
 
     The pipeline is trained on the feature columns of ``churn_train.csv``
@@ -171,7 +197,32 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    # drop "cancel_initiated"
+    categorical_columns = ["gender", "level"]
+    numeric_columns = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    numeric_transformer = Pipeline([
+    ("imputer", SimpleImputer()),
+    ("scaler", StandardScaler()),
+    ])
+    preprocess = ColumnTransformer([
+    ("categorical", OneHotEncoder(), categorical_columns),
+    ("numeric", numeric_transformer, numeric_columns)
+    ])
+    # sensitive to scale
+    model = LogisticRegression()
+    estimator =  Pipeline([
+        ("preprocess", preprocess),
+        ("model", model)
+    ])
+    return estimator
 
 
 # ============================================================
