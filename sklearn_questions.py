@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
 
 
 # ============================================================
@@ -129,7 +135,9 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        if y is None:
+            raise ValueError("y cannot be empty")
+        return sum(1 for i in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +160,37 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a DataFrame")
+
+        if "registration_month" not in X.columns:
+            raise ValueError("missing registration_month")
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must be datetime")
+
+        if y is None:
+            raise ValueError("target y is required")
+
+        y = np.asarray(y)
+
+        if len(y) != len(X):
+            raise ValueError("X and y must have the same length")
+
+        months = X["registration_month"].dt.to_period("M")
+
+        for month in sorted(months.dropna().unique()):
+            train_idx = np.flatnonzero(months == month)
+            test_idx = np.flatnonzero(months == month + 1)
+
+            if (
+                set(y[train_idx]) == {0, 1}
+                and set(y[test_idx]) == {0, 1}
+            ):
+                yield train_idx, test_idx
+
 
 
 # ============================================================
@@ -171,7 +209,43 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical_features = ["gender", "level"]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+    ]
+
+    categorical_transformer = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore")),
+    ])
+
+    numerical_transformer = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("categorical", categorical_transformer, categorical_features),
+        ("numerical", numerical_transformer, numerical_features),
+    ])
+
+    estimator = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(
+            n_estimators=300,
+            min_samples_leaf=3,
+            class_weight="balanced",
+            random_state=42,
+        )),
+    ])
+
+    return estimator
+
 
 
 # ============================================================
