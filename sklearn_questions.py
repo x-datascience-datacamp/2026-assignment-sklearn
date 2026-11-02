@@ -129,7 +129,27 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype.")
+
+        periods = X["registration_month"].dt.to_period("M").sort_values().unique()
+
+        n_valid_splits = 0
+        for i in range(len(periods) - 1):
+            month_train = periods[i]
+            month_test = periods[i + 1]
+
+            idx_train = (
+                X[X["registration_month"].dt.to_period("M") == month_train].index
+            )
+            idx_test = (
+                X[X["registration_month"].dt.to_period("M") == month_test].index
+            )
+
+            if y.loc[idx_train].nunique() == 2 and y.loc[idx_test].nunique() == 2:
+                n_valid_splits += 1
+
+        return n_valid_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +171,27 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype.")
+
+        periods = X["registration_month"].dt.to_period("M").sort_values().unique()
+
+        for i in range(len(periods) - 1):
+            # Get the current month and the next month
+            month_train = periods[i]
+            month_test = periods[i + 1]
+
+            # Get indices for training and testing sets
+            idx_train = (
+                X[X["registration_month"].dt.to_period("M") == month_train].index
+            )
+            idx_test = (
+                X[X["registration_month"].dt.to_period("M") == month_test].index
+            )
+
+            # Check if both classes are present in both folds
+            if y.loc[idx_train].nunique() == 2 and y.loc[idx_test].nunique() == 2:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,7 +210,30 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    df = pd.read_csv("data/churn_train.csv")
+    df = df.drop(columns=["user_id", "registration_month", "churn"])
+    df = df.drop(columns=["has_downgraded", "cancel_initiated"])
+    # these features are too correlated with the churn prediction
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.ensemble import RandomForestClassifier
+    categorical_features = ["gender", "level"]
+    numerical_features = df.columns.difference(categorical_features)
+    column_transformer = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(), categorical_features),
+            ("num", SimpleImputer(strategy="mean"), numerical_features),
+        ]
+    )
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", column_transformer),
+            ("classifier", RandomForestClassifier(random_state=42)),
+        ]
+    )
+    return pipeline
 
 
 # ============================================================
