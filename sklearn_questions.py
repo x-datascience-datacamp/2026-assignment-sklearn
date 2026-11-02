@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,31 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have a datetime dtype.")
+
+        if y is None:
+            raise ValueError("y is required to check both churn classes.")
+
+        targets = np.asarray(y)
+
+        if targets.ndim != 1 or len(targets) != len(X):
+            raise ValueError("y must contain one target for each row of X.")
+
+        months = X["registration_month"].dt.to_period("M")
+
+        for month in sorted(months.dropna().unique()):
+            train_idx = np.flatnonzero((months == month).to_numpy())
+            test_idx = np.flatnonzero((months == month + 1).to_numpy())
+
+            if (
+                set(np.unique(targets[train_idx])) == {0, 1}
+                and set(np.unique(targets[test_idx])) == {0, 1}
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -170,8 +198,36 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_columns = ["gender", "level"]
+
+    numerical_columns = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    preprocessing = ColumnTransformer([
+        (
+            "categorical",
+            OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+            categorical_columns,
+        ),
+        ("numerical", numerical_pipeline, numerical_columns),
+    ], remainder="drop")
+
+    return Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
@@ -184,6 +240,7 @@ if __name__ == "__main__":
     train = pd.read_csv(
         "data/churn_train.csv", parse_dates=["registration_month"]
     )
+
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
@@ -191,11 +248,13 @@ if __name__ == "__main__":
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
+
     for i, (tr, te) in enumerate(cv.split(X, y)):
         m_tr = train.iloc[tr]["registration_month"].dt.to_period("M").unique()
         m_te = train.iloc[te]["registration_month"].dt.to_period("M").unique()
         churn_tr = y.iloc[tr].mean()
         churn_te = y.iloc[te].mean()
+
         print(
             f"Fold {i}: train={sorted(m_tr)} "
             f"(n={len(tr)}, churn={churn_tr:.1%})"
@@ -207,5 +266,6 @@ if __name__ == "__main__":
     print("\n=== Cross-validation with RegistrationSplit ===")
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
+
     print(f"CV results : {scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
