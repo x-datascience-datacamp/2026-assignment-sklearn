@@ -92,6 +92,12 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from sklearn.model_selection import BaseCrossValidator
 
@@ -128,7 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
+        return sum(1 for _ in self.split(X, y, groups))
         ...
 
     def split(self, X, y, groups=None):
@@ -151,7 +157,31 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("'registration_month' column must be datetime dtype.")
+
+        if y is None:
+            raise ValueError("y cannot be None.")
+
+        y_arr = np.asarray(y)
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = np.sort(months.unique())
+
+        for i in range(len(unique_months) - 1):
+            m_tr = unique_months[i]
+            m_te = unique_months[i + 1]
+
+            idx_tr = np.where(months == m_tr)[0]
+            idx_te = np.where(months == m_te)[0]
+
+            if len(np.unique(y_arr[idx_tr])) > 1 and len(np.unique(y_arr[idx_te])) > 1:
+                yield idx_tr, idx_te
         ...
 
 
@@ -170,7 +200,44 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
+    cat_cols = ["gender", "level"]
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "num",
+                Pipeline(
+                    [
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                num_cols,
+            ),
+            (
+                "cat",
+                OneHotEncoder(drop="first", handle_unknown="ignore"),
+                cat_cols,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", HistGradientBoostingClassifier(random_state=42)),
+        ]
+    )
     ...
 
 
