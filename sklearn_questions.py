@@ -95,6 +95,12 @@ import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
 
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+
 
 # ============================================================
 # Question 1
@@ -129,7 +135,12 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        n_splits = 0
+
+        for train, test in self.split(X, y):
+            n_splits += 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,8 +163,33 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
 
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be datetime")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.unique())
+        y = pd.Series(y).reset_index(drop=True)
+
+        for month in unique_months:
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            idx_train = []
+            idx_test = []
+
+            for i in range(len(months)):
+                if months.iloc[i] == month:
+                    idx_train.append(i)
+
+                if months.iloc[i] == next_month:
+                    idx_test.append(i)
+
+            if y.iloc[idx_train].nunique() == 2:
+                if y.iloc[idx_test].nunique() == 2:
+                    yield idx_train, idx_test
 
 # ============================================================
 # Question 2
@@ -171,8 +207,35 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
 
+    categorical = ["gender", "level"]
+
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ("numerical", numerical_pipeline, numerical),
+    ])
+
+    estimator = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
+
+    return estimator
 
 # ============================================================
 # Script to test the objects implemented in this file.
