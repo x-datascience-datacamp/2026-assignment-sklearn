@@ -91,10 +91,16 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from pandas.api.types import is_datetime64_any_dtype
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 # ============================================================
 # Question 1
@@ -128,7 +134,10 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
+        count = 0
+        for _ in self.split(X, y, groups):
+            count += 1
+        return count
         ...
 
     def split(self, X, y, groups=None):
@@ -151,8 +160,36 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be format of datetime")
+
+        if y is None:
+            raise ValueError("y can't be empty")
+
+        df = X.copy()
+        df["month"] = df["registration_month"].dt.to_period("M")
+        y_arr = np.array(y)
+
+        months = sorted(df["month"].unique())
+
+        for i in range(len(months) - 1):
+            train_month = months[i]
+            test_month = months[i + 1]
+
+            train_idx = np.where(df["month"] == train_month)[0]
+            test_idx = np.where(df["month"] == test_month)[0]
+
+            train_classes = set(y_arr[train_idx])
+            test_classes = set(y_arr[test_idx])
+
+            if (
+                0 in train_classes
+                and 1 in train_classes
+                and 0 in test_classes
+                and 1 in test_classes
+            ):
+                yield train_idx, test_idx
+
 
 
 # ============================================================
@@ -170,7 +207,36 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    cat_cols = ["gender", "level"]
+
+    num_transformer = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler())
+    ])
+
+    cat_transformer = OneHotEncoder(handle_unknown="ignore")
+
+    preprocessor = ColumnTransformer([
+        ("num", num_transformer, num_cols),
+        ("cat", cat_transformer, cat_cols)
+    ])
+
+    pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression())
+    ])
+
+    return pipeline
     ...
 
 
