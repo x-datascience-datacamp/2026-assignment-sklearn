@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,40 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError(
+                "X must be a DataFrame with a datetime registration_month column."
+            )
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column.")
+
+        registration_month = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(registration_month.dtype):
+            raise ValueError("registration_month must have a datetime dtype.")
+        if y is None:
+            raise ValueError("y is required to check class coverage in each fold.")
+
+        y_values = np.asarray(y)
+        if len(y_values) != len(X):
+            raise ValueError("X and y must contain the same number of samples.")
+
+        months = registration_month.dt.to_period("M")
+        observed_months = sorted(months.dropna().unique())
+
+        for month in observed_months:
+            next_month = month + 1
+            if next_month not in observed_months:
+                continue
+
+            train_idx = np.flatnonzero(months.eq(month).to_numpy())
+            test_idx = np.flatnonzero(months.eq(next_month).to_numpy())
+            train_classes = np.unique(y_values[train_idx])
+            test_classes = np.unique(y_values[test_idx])
+            if (
+                np.isin([0, 1], train_classes).all()
+                and np.isin([0, 1], test_classes).all()
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -162,16 +199,50 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    The pipeline excludes ``user_id``, ``registration_month``, ``churn``,
+    and ``cancel_initiated``. The latter is unavailable for the held-out
+    prediction cohort.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore"),
+                categorical_features,
+            ),
+            ("numerical", SimpleImputer(strategy="median"), numerical_features),
+        ]
+    )
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                RandomForestClassifier(
+                    n_estimators=300,
+                    min_samples_leaf=3,
+                    class_weight="balanced",
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
 
 
 # ============================================================
