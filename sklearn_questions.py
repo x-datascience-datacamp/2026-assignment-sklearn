@@ -95,6 +95,11 @@ import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
 
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
 # ============================================================
 # Question 1
@@ -129,7 +134,22 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        res=0
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be datetime")
+
+        registration_months = pd.to_datetime(
+            X["registration_month"]
+        ).dt.to_period("M")
+        months = sorted(registration_months.unique())
+        for month in months:
+            y_train = y.loc[registration_months == month]
+            y_test = y.loc[registration_months == month+1]
+
+            if len(y_train.unique())==2 and len(y_test.unique())==2:
+                res+=1
+        return res
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +172,22 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be datetime")
+
+        registration_months = pd.to_datetime(
+            X["registration_month"]
+        ).dt.to_period("M")
+        months = sorted(registration_months.unique())
+        for month in months:
+            X_train = X.loc[registration_months == month]
+            y_train = y.loc[registration_months == month]
+
+            X_test = X.loc[registration_months == month+1]
+            y_test = y.loc[registration_months == month+1]
+
+            if len(y_train.unique())==2 and len(y_test.unique())==2:
+                yield (X_train.index.to_numpy(),X_test.index.to_numpy())
 
 
 # ============================================================
@@ -171,9 +206,42 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical_columns = ["gender", "level"]
 
+    numerical_columns = [
+        "total_events",
+        "rate_songs",
+        "rate_errors",
+        "n_sessions",
+        #"has_downgraded",
+        #"cancel_initiated",
+    ]
 
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+
+    numerical_transformer = SimpleImputer(strategy="median")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("categorical", categorical_transformer, categorical_columns),
+            ("numerical", numerical_transformer, numerical_columns),
+        ]
+    )
+
+    res = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(
+                n_estimators=500,
+                max_depth=None,
+                min_samples_leaf=2,
+                max_features=0.8,
+                random_state=42
+            )),
+        ]
+    )
+
+    return res
 # ============================================================
 # Script to test the objects implemented in this file.
 # ============================================================
