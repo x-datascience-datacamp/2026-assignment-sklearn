@@ -91,14 +91,30 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
-
-from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.base import clone
+from sklearn.compose import ColumnTransformer
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.ensemble import (
+    GradientBoostingClassifier,
+    RandomForestClassifier,
+)
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import BaseCrossValidator, GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import (
+    FunctionTransformer,
+    OneHotEncoder,
+    StandardScaler,
+)
+from sklearn.svm import SVC
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -110,6 +126,75 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    @staticmethod
+    def _get_months(X):
+        """Return the registration months of ``X`` as a monthly Period array.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Data containing a ``registration_month`` column.
+
+        Returns
+        -------
+        months : pandas.Series
+            Registration month of each sample, as ``Period[M]``.
+
+        Raises
+        ------
+        ValueError
+            If ``X`` has no ``registration_month`` column or if this column
+            is not of datetime dtype.
+        """
+        if not hasattr(X, "columns") or "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+        col = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(col):
+            raise ValueError(
+                "'registration_month' must be of datetime dtype, "
+                f"got {col.dtype}."
+            )
+        return col.dt.to_period("M").reset_index(drop=True)
+
+    def _iter_folds(self, X, y):
+        """Yield the valid (train, test) index pairs.
+
+        A fold is valid if month M and month M+1 both exist in the data and
+        both contain at least one churner and one non-churner.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Data containing a ``registration_month`` column.
+        y : array-like of shape (n_samples,)
+            Target values (0 = retained, 1 = churned).
+
+        Yields
+        ------
+        idx_train : ndarray
+            Indices of users registered in month M.
+        idx_test : ndarray
+            Indices of users registered in month M+1.
+        """
+        if y is None:
+            raise ValueError("y is required to check that both classes exist.")
+        months = self._get_months(X)
+        y = np.asarray(y)
+        if len(y) != len(months):
+            raise ValueError("X and y must have the same number of samples.")
+
+        for month in sorted(months.unique()):
+            next_month = month + 1
+            idx_train = np.flatnonzero((months == month).to_numpy())
+            idx_test = np.flatnonzero((months == next_month).to_numpy())
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+            yield idx_train, idx_test
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +213,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self._iter_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,29 +235,165 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._iter_folds(X, y)
 
 
 # ============================================================
 # Question 2
 # ============================================================
 
-def get_estimator():
-    """Return a scikit-learn Pipeline for churn prediction.
+TRAIN_PATH = "data/churn_train.csv"
+CATEGORICAL_COLS = ["gender", "level"]
+NUMERICAL_COLS = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "rate_other",
+    "log_events_per_session",
+]
+# Columns not used: user_id (identifier), registration_month (used for the
+# split), cancel_initiated (leakage: identical to the target), n_sessions
+# and has_downgraded (noise, no gain in cross-validation).
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+
+def add_features(X):
+    """Add engineered features to the raw user table.
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Raw feature table (``total_events`` is log(1 + n_events)).
+
+    Returns
+    -------
+    X_new : pandas.DataFrame
+        Copy of ``X`` with two extra columns: ``rate_other`` (share of
+        events that are neither songs, thumbs nor errors) and
+        ``log_events_per_session`` (log of the average session length).
+    """
+    X = X.copy()
+    n_events = np.expm1(X["total_events"])
+    n_sessions = X["n_sessions"].clip(lower=1)
+    X["log_events_per_session"] = np.log(n_events.clip(lower=1) / n_sessions)
+    X["rate_other"] = (
+        1
+        - X["rate_songs"]
+        - X["rate_thumbs_up"]
+        - X["rate_thumbs_down"]
+        - X["rate_errors"].fillna(0)
+    )
+    return X
+
+
+def _build_pipeline():
+    """Build feature engineering + preprocessing + classifier pipeline.
+
+    Returns
+    -------
+    pipeline : sklearn.pipeline.Pipeline
+        Pipeline with feature engineering, a ``ColumnTransformer`` (one-hot
+        encoding of categorical columns, imputation and scaling of numerical
+        columns) and a classifier placeholder named ``clf``.
+    """
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore", drop="if_binary"),
+                CATEGORICAL_COLS,
+            ),
+            (
+                "num",
+                Pipeline(
+                    [
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                NUMERICAL_COLS,
+            ),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("features", FunctionTransformer(add_features)),
+            ("preprocessor", preprocessor),
+            ("clf", LogisticRegression()),
+        ]
+    )
+
+
+def _build_param_grid():
+    """Return the grid of classifiers and hyperparameters to explore.
+
+    Returns
+    -------
+    param_grid : list of dict
+        One dictionary per model (ridge logistic regression, LDA, SVC,
+        random forest, gradient boosting).
+    """
+    return [
+        {
+            "clf": [LogisticRegression(max_iter=1000)],  # l2 = ridge
+            "clf__C": [0.01, 0.1, 1, 10],
+        },
+        {
+            "clf": [LinearDiscriminantAnalysis(solver="lsqr")],
+            "clf__shrinkage": [None, "auto", 0.1, 0.5],
+        },
+        {
+            "clf": [SVC(probability=True, random_state=0)],
+            "clf__C": [0.1, 1, 10],
+            "clf__kernel": ["rbf", "linear"],
+            "clf__gamma": ["scale", 0.01],
+        },
+        {
+            "clf": [RandomForestClassifier(random_state=0, n_jobs=-1)],
+            "clf__n_estimators": [200],
+            "clf__max_depth": [3, 5],
+            "clf__min_samples_leaf": [10, 30],
+        },
+        {
+            "clf": [GradientBoostingClassifier(random_state=0)],
+            "clf__n_estimators": [100],
+            "clf__learning_rate": [0.03, 0.1],
+            "clf__max_depth": [1, 2],
+            "clf__subsample": [0.8],
+        },
+    ]
+
+
+def get_estimator():
+    """Run a grid search and return the best pipeline.
+
+    The grid search is scored with ROC-AUC and uses ``RegistrationSplit``
+    as cross-validator, so the selection mimics the production setting
+    (train on one cohort, predict on the next one).
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
-        An unfitted pipeline ready to be used with ``fit`` / ``predict``.
+        Unfitted pipeline configured with the best hyperparameters.
     """
-    # TODO
-    ...
+    df = pd.read_csv(TRAIN_PATH, parse_dates=["registration_month"])
+    X = df.drop(columns=["churn"])
+    y = df["churn"]
 
-
+    pipeline = _build_pipeline()
+    search = GridSearchCV(
+        estimator=pipeline,
+        param_grid=_build_param_grid(),
+        scoring="roc_auc",
+        cv=RegistrationSplit(),
+        n_jobs=-1,
+    )
+    search.fit(X, y)
+    print(f"Best CV ROC-AUC: {search.best_score_:.4f}")
+    print(f"Best params: {search.best_params_}")
+    return clone(pipeline).set_params(**search.best_params_)
 # ============================================================
 # Script to test the objects implemented in this file.
 # ============================================================
