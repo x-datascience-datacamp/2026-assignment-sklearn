@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,28 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not hasattr(X, "columns") or "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype."
+            )
+
+        periods = X["registration_month"].dt.to_period("M")
+        unique_periods = np.sort(periods.unique())
+        y_arr = np.asarray(y) if y is not None else None
+
+        for m_tr, m_te in zip(unique_periods[:-1], unique_periods[1:]):
+            tr_idx = np.where(periods == m_tr)[0]
+            te_idx = np.where(periods == m_te)[0]
+
+            if y_arr is not None:
+                y_tr = y_arr[tr_idx]
+                y_te = y_arr[te_idx]
+                if len(np.unique(y_tr)) < 2 or len(np.unique(y_te)) < 2:
+                    continue
+
+            yield tr_idx, te_idx
 
 
 # ============================================================
@@ -170,8 +195,33 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cat_cols = ["gender", "level"]
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    num_pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("num", num_pipe, num_cols),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+    ])
+
+    pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(random_state=42)),
+    ])
+
+    return pipeline
 
 
 # ============================================================
@@ -199,7 +249,7 @@ if __name__ == "__main__":
         print(
             f"Fold {i}: train={sorted(m_tr)} "
             f"(n={len(tr)}, churn={churn_tr:.1%})"
-            f"  →  test={sorted(m_te)} "
+            f"  ->  test={sorted(m_te)} "
             f"(n={len(te)}, churn={churn_te:.1%})"
         )
 
