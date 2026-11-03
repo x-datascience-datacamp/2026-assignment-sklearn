@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self._iter_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,63 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._iter_folds(X, y)
+
+    def _iter_folds(self, X, y=None):
+        """Generate the indices of the valid monthly folds.
+
+        Shared by ``split`` and ``get_n_splits`` so that both always agree on
+        the folds.  Train on month M and test on month M+1, skipping months
+        with no following cohort.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame of shape (n_samples, n_features)
+            Training data, must contain a ``registration_month`` column of
+            datetime dtype.
+        y : array-like of shape (n_samples,), default=None
+            Target values.  If given, folds where the training set or the
+            test set does not contain both classes are skipped.
+
+        Yields
+        ------
+        idx_train : ndarray
+            The training set indices for that split.
+        idx_test : ndarray
+            The testing set indices for that split.
+
+        Raises
+        ------
+        ValueError
+            If ``X`` is not a DataFrame with a ``registration_month`` column,
+            or if that column is not of datetime dtype.
+        """
+        if not isinstance(X, pd.DataFrame) or (
+            "registration_month" not in X.columns
+        ):
+            raise ValueError(
+                "X must be a DataFrame with a 'registration_month' column."
+            )
+        dates = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype."
+            )
+        months = dates.dt.to_period("M").to_numpy()
+        if y is not None:
+            y = np.asarray(y)
+
+        for month in sorted(set(months)):
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+            if len(idx_test) == 0:
+                continue
+            if y is not None and (
+                len(np.unique(y[idx_train])) < 2
+                or len(np.unique(y[idx_test])) < 2
+            ):
+                continue
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +230,32 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    numerical_pipeline = make_pipeline(
+        SimpleImputer(strategy="median"), StandardScaler()
+    )
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+            ("num", numerical_pipeline, numerical),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
