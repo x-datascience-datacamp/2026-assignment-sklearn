@@ -94,6 +94,12 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.linear_model import LogisticRegression
 
 
 # ============================================================
@@ -129,7 +135,8 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,8 +159,23 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("Date must be datetime")
 
+        months=X["registration_month"].dt.to_period("M")
+        y=np.asarray(y)
+
+        for month in sorted(months.unique()):
+            train_idx=np.where(months==month)[0]
+            test_idx=np.where(months==month+1)[0]
+
+            if (
+                len(train_idx)>0
+                and len(test_idx)>0
+                and len(np.unique(y[train_idx]))==2
+                and len(np.unique(y[test_idx]))==2
+            ):
+                yield train_idx, test_idx
 
 # ============================================================
 # Question 2
@@ -171,7 +193,28 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical=["gender", "level"]
+
+    numerical=[
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    num_pipeline = Pipeline([("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),])
+
+    preprocessor = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ("num", num_pipeline, numerical),])
+
+    model = Pipeline([("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),])
+    return model
 
 
 # ============================================================
