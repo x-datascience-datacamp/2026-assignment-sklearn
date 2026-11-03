@@ -91,14 +91,21 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return len([split for split in self.split(X, y)])
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,13 +157,27 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+
+        month_series = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(month_series.unique())
+
+        for i in range(len(unique_months) - 1):
+            month_train = unique_months[i]
+            month_test = unique_months[i + 1]
+
+            idx_train = np.where(month_series == month_train)[0]
+            idx_test = np.where(month_series == month_test)[0]
+
+            if len(np.unique(y[idx_train])) > 1 and len(np.unique(y[idx_test])) > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,8 +190,40 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+    ]
+    cat_cols = [
+        "gender",
+        "level",
+        "has_downgraded",
+    ]
+    # >> pd.crosstab(train["cancel_initiated"], train["churn"])
+    # churn               0    1
+    # cancel_initiated
+    # 0                 559    0
+    # 1                   0  161
+    #
+    # => cancel_initiated as a feature = data leakage
+
+    preprocessing = ColumnTransformer(
+        transformers=[
+            ("num", SimpleImputer(strategy="mean"), num_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+        ]
+    )
+
+    return Pipeline(
+        [
+            ("preprocessing", preprocessing),
+            ("classifier", HistGradientBoostingClassifier()),
+        ]
+    )
 
 
 # ============================================================
@@ -181,9 +233,7 @@ def get_estimator():
 if __name__ == "__main__":
     from sklearn.model_selection import cross_validate
 
-    train = pd.read_csv(
-        "data/churn_train.csv", parse_dates=["registration_month"]
-    )
+    train = pd.read_csv("data/churn_train.csv", parse_dates=["registration_month"])
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
@@ -197,10 +247,8 @@ if __name__ == "__main__":
         churn_tr = y.iloc[tr].mean()
         churn_te = y.iloc[te].mean()
         print(
-            f"Fold {i}: train={sorted(m_tr)} "
-            f"(n={len(tr)}, churn={churn_tr:.1%})"
-            f"  →  test={sorted(m_te)} "
-            f"(n={len(te)}, churn={churn_te:.1%})"
+            f"Fold {i}: train={sorted(m_tr)} (n={len(tr)}, churn={churn_tr:.1%})  ",
+            "→  test={sorted(m_te)} (n={len(te)}, churn={churn_te:.1%})",
         )
 
     # ---- cross-validate the estimator ----
