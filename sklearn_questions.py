@@ -91,14 +91,19 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
 
+import sklearn
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -129,7 +134,10 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("Column 'registration_month' must be of datetime dtype")
+        registration_months = X["registration_month"].dt.to_period("M")
+        return registration_months.nunique() - 1
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,12 +160,23 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("Column 'registration_month' must be of datetime dtype")
+        X["registration_month"] = X["registration_month"].dt.to_period("M")
+        months = sorted(X["registration_month"].unique())
+        for i in range(len(months) - 1):
+            train_month = months[i]
+            test_month = months[i + 1]
+            idx_train = X[X["registration_month"] == train_month].index
+            idx_test = X[X["registration_month"] == test_month].index
+            if y.loc[idx_train].nunique() > 1 and y.loc[idx_test].nunique() > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -171,7 +190,43 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+
+    cat_cols = ["gender", "level"]
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+        "cancel_initiated",
+    ]
+
+    cat_pipeline = Pipeline(
+        [
+            (
+                "imputer",
+                sklearn.impute.SimpleImputer(strategy="constant", fill_value="missing"),
+            ),
+            ("onehot_encoder", sklearn.preprocessing.OneHotEncoder()),
+        ]
+    )
+
+    preprocessor = sklearn.compose.ColumnTransformer(
+        [
+            ("categorical_preproc", cat_pipeline, cat_cols),
+            ("numerical_preproc", sklearn.impute.SimpleImputer(), num_cols),
+        ]
+    )
+
+    model = Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(max_depth=10, n_estimators=500)),
+        ]
+    )
+    return model
 
 
 # ============================================================
@@ -181,9 +236,7 @@ def get_estimator():
 if __name__ == "__main__":
     from sklearn.model_selection import cross_validate
 
-    train = pd.read_csv(
-        "data/churn_train.csv", parse_dates=["registration_month"]
-    )
+    train = pd.read_csv("data/churn_train.csv", parse_dates=["registration_month"])
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
