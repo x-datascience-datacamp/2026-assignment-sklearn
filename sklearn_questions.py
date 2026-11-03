@@ -128,8 +128,47 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return len(list(self._valid_splits(X, y)))
+
+    def _valid_splits(self, X, y):
+        """Generate valid splits of the data.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training data, must contain a ``registration_month`` column.
+        y : array-like of shape (n_samples,)
+            Target values.  Used to check that both classes are present.
+
+        Yields
+        ------
+        idx_train : ndarray
+            The training set indices for that split.
+        idx_test : ndarray
+            The testing set indices for that split.
+        """
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "registration_month must be of datetime dtype, "
+                f"got {X['registration_month'].dtype}"
+            )
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.unique())
+
+        for month in unique_months[:-1]:
+            train_idx = months[months == month].index
+            test_idx = months[months == (month + 1)].index
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            y_train = y.loc[train_idx]
+            y_test = y.loc[test_idx]
+
+            if y_train.nunique() < 2 or y_test.nunique() < 2:
+                continue
+
+            yield train_idx, test_idx
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +190,7 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._valid_splits(X, y)
 
 
 # ============================================================
@@ -170,8 +208,54 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    from sklearn.pipeline import Pipeline
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+    from sklearn.impute import SimpleImputer
+    from sklearn.ensemble import RandomForestClassifier
+
+    # Define the feature columns
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+    ]
+
+    # Create transformers for categorical and numerical features
+    categorical_transformer = Pipeline(
+        steps=[
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    numerical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="mean")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    # Combine transformers into a ColumnTransformer
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", categorical_transformer, categorical_features),
+            ("num", numerical_transformer, numerical_features),
+        ]
+    )
+
+    # Create the final pipeline with a classifier
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(random_state=42)),
+        ]
+    )
+
+    return pipeline
 
 
 # ============================================================
