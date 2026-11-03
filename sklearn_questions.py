@@ -92,7 +92,9 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
+import sklearn
 from sklearn.model_selection import BaseCrossValidator
 
 
@@ -129,7 +131,12 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+
+        print('des', X.describe())
+        print('info', X.info())
+
+        return sum(1 for _ in self.split(X, y))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -154,6 +161,45 @@ class RegistrationSplit(BaseCrossValidator):
         # Split into monthly registration folds - TODO
         ...
 
+        print('des', X.describe())
+        print('info', X.info())
+        # with pd.option_context(
+        #     "display.max_columns", None, "display.max_width", None
+        # ):
+        print('head', X.head())
+
+
+        if "registration_month" not in X.columns:
+            raise ValueError(
+                "The input DataFrame must contain a 'registration_month' column."
+            )
+
+
+        # X["registration_month"] = pd.to_datetime(X["registration_month"])
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "The 'registration_month' column must have a datetime dtype."
+            )
+
+
+        # assert X["registration_month"].dtype == "datetime64", (
+        #     "The 'registration_month' column must be of type datetime64[ns]."
+        # )
+
+        splits_idx = np.unique(X["registration_month"].dt.to_period("M"))
+        idx = np.arange(len(X))
+        for k in range(len(splits_idx) - 1):
+            mask_train = (X["registration_month"].dt.to_period("M") == splits_idx[k])
+            mask_test = (X["registration_month"].dt.to_period("M") == splits_idx[k + 1])
+            train_idx = idx[mask_train]
+            test_idx = idx[mask_test]
+
+            # Check if both classes are present in train and test sets
+            if len(np.unique(y.iloc[train_idx])) > 1 \
+            and len(np.unique(y.iloc[test_idx])) > 1:
+                yield train_idx, test_idx
+
 
 # ============================================================
 # Question 2
@@ -172,6 +218,30 @@ def get_estimator():
     """
     # TODO
     ...
+
+    estimator = sklearn.pipeline.Pipeline([
+        ("preprocessor", sklearn.compose.ColumnTransformer([
+            ("categorical", sklearn.preprocessing.OneHotEncoder(
+                handle_unknown="ignore"
+            ), ["gender", "level"]),
+            ("numerical", sklearn.impute.SimpleImputer(
+                strategy="mean"
+            ), [
+                "total_events",
+                "rate_songs",
+                "rate_thumbs_up",
+                "rate_thumbs_down",
+                "rate_errors",
+                "n_sessions",
+                "has_downgraded"
+            ])
+        ])),
+        ("classifier", sklearn.ensemble.RandomForestClassifier(random_state=42))
+    ])
+
+    return estimator
+
+
 
 
 # ============================================================
@@ -205,6 +275,10 @@ if __name__ == "__main__":
 
     # ---- cross-validate the estimator ----
     print("\n=== Cross-validation with RegistrationSplit ===")
+
+    corr = X.select_dtypes(include="number").corr()
+    print('correlation',corr.round(3))
+
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
     print(f"CV results : {scores.round(3)}")
