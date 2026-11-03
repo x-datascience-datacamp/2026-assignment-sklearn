@@ -129,7 +129,37 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+
+        n_splits = 0
+        if 'registration_month' not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "La colonne registration_month doit être de type datetime."
+            )
+
+        months = X["registration_month"].dt.to_period("M")
+        X['month'] = months
+        months = months.sort_values().unique()
+
+        print(len(months))
+
+        for i in range(len(months) - 1):
+            train_month = months[i]
+            test_month = months[i+1]
+
+            if y is not None:
+                train_mask = X["month"] == train_month
+                test_mask = X["month"] == test_month
+
+                y_train = y[train_mask]
+                y_test = y[test_mask]
+
+                if len(y_train.unique()) == 2 and len(y_test.unique()) == 2:
+                    n_splits += 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +182,30 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "La colonne registration_month doit être de type datetime."
+            )
+
+        months = X["registration_month"].dt.to_period("M")
+        X['month'] = months
+        months = months.sort_values().unique()
+
+        for i in range(len(months) - 1):
+            months_train = months[i]
+            months_test = months[i + 1]
+
+            train_mask = X["month"] == months_train
+            test_mask = X["month"] == months_test
+
+            idx_train = X.index[train_mask].to_numpy()
+            idx_test = X.index[test_mask].to_numpy()
+
+            y_train = y.iloc[idx_train]
+            y_test = y.iloc[idx_test]
+
+            if len(y_train.unique()) > 1 and len(y_test.unique()) > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,7 +224,50 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    from sklearn.pipeline import Pipeline
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.impute import SimpleImputer
+    from sklearn.ensemble import RandomForestClassifier
+
+    df = pd.read_csv(
+        "data/churn_train.csv", parse_dates=["registration_month"]
+    )
+    categorical_cols = ["gender", "level"]
+
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+    ]
+
+    cols_to_drop = [
+        'user_id', 'registration_month', 'churn',
+        'has_downgraded', 'cancel_initiated'
+    ]
+    df = df.drop(columns=cols_to_drop)
+
+    numeric_transformer = SimpleImputer(strategy="mean")
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numerical_cols),
+            ("cat", categorical_transformer, categorical_cols),
+        ]
+    )
+
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(random_state=42))
+        ]
+    )
+
+    return pipeline
 
 
 # ============================================================
@@ -208,4 +304,5 @@ if __name__ == "__main__":
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
     print(f"CV results : {scores.round(3)}")
+
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
