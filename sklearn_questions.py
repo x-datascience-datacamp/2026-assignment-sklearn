@@ -94,11 +94,18 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+import numpy as np
 
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +157,18 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+
+        months = X["registration_month"].dt.to_period("M").to_numpy()
+        n_classes = pd.Series(np.asarray(y)).groupby(months).nunique()
+        valid_months = set(n_classes[n_classes == 2].index)
+
+        for month in sorted(valid_months):
+            if month + 1 in valid_months:
+                idx_train = np.flatnonzero(months == month)
+                idx_test = np.flatnonzero(months == month + 1)
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +186,36 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cat_cols = ['gender', 'level']
+    # cancel_initiated is left out: it leaks the target, and it is not
+    # available at prediction time (always 0 in the held-out set).
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    cat_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy='constant', fill_value='missing')),
+        ("onehot_encoder", OneHotEncoder())
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("categorical_preproc", cat_pipeline, cat_cols),
+        ("numerical_preproc", SimpleImputer(), num_cols)
+    ])
+
+    model = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(
+            max_depth=10, n_estimators=500
+        ))
+    ])
+    return model
 
 
 # ============================================================
