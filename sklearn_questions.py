@@ -34,7 +34,7 @@ features derived from the raw log:
 +-------------------+--------------------------------------------+
 | cancel_initiated  | 1 if user visited the cancellation page    |
 +-------------------+--------------------------------------------+
-| registration_month| Month the user registered (datetime)      |
+| registration_month| Month the user registered (datetime)       |
 +-------------------+--------------------------------------------+
 | churn             | Target: 1 = churned, 0 = retained          |
 +-------------------+--------------------------------------------+
@@ -91,14 +91,21 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
-import pandas as pd
 
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -120,7 +127,7 @@ class RegistrationSplit(BaseCrossValidator):
             Training data, must contain a ``registration_month`` column.
         y : array-like of shape (n_samples,), optional
             Target values.  Used to check that both classes are present.
-        groups : array-like of shape (n_samples,)
+        groups : array-like of shape (n_samples,), optional
             Always ignored, exists for compatibility.
 
         Returns
@@ -128,8 +135,11 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if y is None:
+            raise ValueError(
+                "y is required to determine the number of valid splits."
+            )
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -141,7 +151,7 @@ class RegistrationSplit(BaseCrossValidator):
         y : array-like of shape (n_samples,)
             Target values.  Used to filter out folds that do not contain
             both classes.
-        groups : array-like of shape (n_samples,)
+        groups : array-like of shape (n_samples,), optional
             Always ignored, exists for compatibility.
 
         Yields
@@ -151,13 +161,46 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "'registration_month' column must be of datetime dtype."
+            )
+        if y is None:
+            raise ValueError("y cannot be None.")
+
+        y_arr = np.asarray(y)
+        if len(y_arr) != len(X):
+            raise ValueError("X and y must have the same length.")
+
+        periods = X["registration_month"].dt.to_period("M")
+        unique_periods = sorted(periods.unique())
+
+        for m_train in unique_periods:
+            m_test = m_train + 1
+            idx_train = np.flatnonzero((periods == m_train).to_numpy())
+            idx_test = np.flatnonzero((periods == m_test).to_numpy())
+
+            if len(idx_test) == 0:
+                continue
+
+            y_train = y_arr[idx_train]
+            y_test = y_arr[idx_test]
+
+            train_has_both = (0 in y_train) and (1 in y_train)
+            test_has_both = (0 in y_test) and (1 in y_test)
+
+            if train_has_both and test_has_both:
+                yield idx_train, idx_test
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,8 +213,50 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cat_cols = ["gender", "level"]
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    num_transformer = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    cat_transformer = Pipeline(
+        [
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", num_transformer, num_cols),
+            ("cat", cat_transformer, cat_cols),
+        ]
+    )
+
+    pipeline = Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                RandomForestClassifier(
+                    n_estimators=100, random_state=42, max_depth=6
+                ),
+            ),
+        ]
+    )
+
+    return pipeline
 
 
 # ============================================================
