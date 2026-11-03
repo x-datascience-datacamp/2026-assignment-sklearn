@@ -95,6 +95,12 @@ import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
 
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+
 
 # ============================================================
 # Question 1
@@ -128,8 +134,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if y is None:
+            raise ValueError("y must be provided")
+        return sum(1 for _ in self.split(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,13 +158,33 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(
+            X['registration_month']
+        ):
+            raise ValueError(
+                "registration_month must have datetime dtype"
+            )
+        X = X.reset_index(drop=True)
+        y = pd.Series(y).reset_index(drop=True)
+        months = X['registration_month'].dt.to_period('M')
+        for month in sorted(months.dropna().unique()):
+            train_idx = months.index[months==month]
+            test_idx = months.index[months==month+1]
+            if (
+                y.iloc[train_idx].nunique() == 2
+                and y.iloc[test_idx].nunique() == 2
+            ):
+                yield train_idx,test_idx
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
+
+
+
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,14 +197,45 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cat_cols = [
+        'gender',
+        'level'
+    ]
+    num_cols = [
+        'total_events',
+        'rate_songs',
+        'rate_thumbs_up',
+        'rate_thumbs_down',
+        'rate_errors',
+        'n_sessions'
+    ]
+    numerical_pipeline = Pipeline([
+        ('imputer', SimpleImputer(strategy='mean')),
+        ('scaler', StandardScaler())
+    ])
+    categorical_pipeline = Pipeline([
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('encoder', OneHotEncoder(handle_unknown='ignore'))
+    ])
+    preprocessor = ColumnTransformer([
+        ('num', numerical_pipeline, num_cols),
+        ('cat', categorical_pipeline, cat_cols)
+    ])
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('classifier', LogisticRegression(
+            solver='liblinear',
+            class_weight=None,
+            max_iter=1000,
+            C=3
+        ))
+    ])
+    return pipeline
 
 
 # ============================================================
 # Script to test the objects implemented in this file.
 # ============================================================
-
 if __name__ == "__main__":
     from sklearn.model_selection import cross_validate
 
@@ -187,7 +245,6 @@ if __name__ == "__main__":
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
-
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
@@ -207,5 +264,6 @@ if __name__ == "__main__":
     print("\n=== Cross-validation with RegistrationSplit ===")
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
+    print(y.value_counts(normalize=True))
     print(f"CV results : {scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
