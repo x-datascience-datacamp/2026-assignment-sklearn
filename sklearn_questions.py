@@ -94,7 +94,7 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
-import numpy as np 
+import numpy as np
 
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
@@ -236,7 +236,6 @@ def get_estimator():
             ("classifier", LogisticRegression(max_iter=1000)),
         ]
     )
-    
 
 
 # ============================================================
