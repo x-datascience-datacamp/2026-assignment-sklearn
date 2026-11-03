@@ -92,7 +92,15 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
+
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import BaseCrossValidator
 
 
@@ -128,8 +136,50 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+
+        if "registration_month" not in X.columns:
+            raise ValueError("Missing registration_month column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must have datetime dtype.")
+
+        if y is None:
+            raise ValueError("y must be provided.")
+
+        y_array = np.asarray(y)
+
+        if len(X) != len(y_array):
+            raise ValueError("X and y must have the same length.")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+
+        n_splits = 0
+
+        for month in unique_months:
+            next_month = month + 1
+
+            train_idx = np.flatnonzero(
+                (months == month).to_numpy()
+            )
+            test_idx = np.flatnonzero(
+                (months == next_month).to_numpy()
+            )
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            if (
+                np.unique(y_array[train_idx]).size == 2
+                and np.unique(y_array[test_idx]).size == 2
+            ):
+                n_splits += 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +201,46 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+
+        if "registration_month" not in X.columns:
+            raise ValueError("Missing registration_month column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must have datetime dtype.")
+
+        if y is None:
+            raise ValueError("y must be provided.")
+
+        y_array = np.asarray(y)
+
+        if len(X) != len(y_array):
+            raise ValueError("X and y must have the same length.")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+
+        for month in unique_months:
+            next_month = month + 1
+
+            train_idx = np.flatnonzero(
+                (months == month).to_numpy()
+            )
+            test_idx = np.flatnonzero(
+                (months == next_month).to_numpy()
+            )
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            if (
+                np.unique(y_array[train_idx]).size == 2
+                and np.unique(y_array[test_idx]).size == 2
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -170,8 +258,70 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    numerical_transformer = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(
+                    strategy="median",
+                    add_indicator=True,
+                ),
+            ),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorical",
+                categorical_transformer,
+                categorical_features,
+            ),
+            (
+                "numerical",
+                numerical_transformer,
+                numerical_features,
+            ),
+        ]
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                RandomForestClassifier(
+                    n_estimators=500,
+                    max_features="sqrt",
+                    min_samples_leaf=3,
+                    class_weight="balanced",
+                    random_state=42,
+                    n_jobs=-1,
+                ),
+            ),
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
