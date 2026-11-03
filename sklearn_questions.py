@@ -92,9 +92,23 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+CATEGORICAL_COLUMNS = ["gender", "level"]
+NUMERICAL_COLUMNS = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 # ============================================================
 # Question 1
@@ -128,9 +142,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
-
+        return sum(1 for _ in self.split(X, y, groups))
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
 
@@ -151,9 +163,26 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        X = pd.DataFrame(X)
+        dates = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype."
+            )
+        months = dates.dt.to_period("M").to_numpy()
+        y = np.asarray(y)
 
+        for month in sorted(set(months)):
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+            if len(idx_test) == 0:
+                continue
+            if (
+                len(np.unique(y[idx_train])) < 2
+                or len(np.unique(y[idx_test])) < 2
+            ):
+                continue
+            yield idx_train, idx_test
 
 # ============================================================
 # Question 2
@@ -170,9 +199,29 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
-
+    preprocessor = ColumnTransformer(
+        [
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore"),
+                CATEGORICAL_COLUMNS,
+            ),
+            (
+                "num",
+                make_pipeline(
+                    SimpleImputer(strategy="median"), StandardScaler()
+                ),
+                NUMERICAL_COLUMNS,
+            ),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 # ============================================================
 # Script to test the objects implemented in this file.
