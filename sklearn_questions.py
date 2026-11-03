@@ -91,9 +91,16 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.utils.validation import check_consistent_length
+from sklearn.pipeline import Pipeline
 
 
 # ============================================================
@@ -128,8 +135,10 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        count = 0
+        for train_idx, test_idx in self.split(X, y, groups):
+            count += 1
+        return count
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +160,48 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have a datetime dtype")
+        if y is None:
+            raise ValueError("y is required to check that both classes are present")
+        check_consistent_length(X, y)
+
+        months = X["registration_month"].dt.to_period("M")
+        targets = np.asarray(y)
+
+        sorted_months = months.reset_index(drop=True).dropna().sort_values()
+        positions = sorted_months.index.to_numpy()
+        month_values = sorted_months.tolist()
+
+        month_slices = []
+        start = 0
+        for i in range(1, len(month_values)):
+            if month_values[i] != month_values[i - 1]:
+                month_slices.append((start, i))
+                start = i
+        if month_values:
+            month_slices.append((start, len(month_values)))
+
+        for i in range(len(month_slices) - 1):
+            train_slice = month_slices[i]
+            test_slice = month_slices[i + 1]
+            train_month = month_values[train_slice[0]]
+            test_month = month_values[test_slice[0]]
+            if test_month != train_month + 1:
+                continue
+
+            train_idx = positions[train_slice[0]:train_slice[1]]
+            test_idx = positions[test_slice[0]:test_slice[1]]
+            train_labels = targets[train_idx]
+            test_labels = targets[test_idx]
+
+            if (
+                0 in train_labels
+                and 1 in train_labels
+                and 0 in test_labels
+                and 1 in test_labels
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -162,16 +211,39 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    The pipeline excludes ``user_id``, ``registration_month``, ``churn``,
+    and the leaking feature ``cancel_initiated``. Regularization strength
+    was selected using monthly cross-validation with ``RegistrationSplit``.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cat_cols = ["gender", "level", "has_downgraded"]
+    num_cols = [
+        "total_events", "rate_songs", "rate_thumbs_up",
+        "rate_thumbs_down", "rate_errors", "n_sessions",
+    ]
+    cat_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+        ("one_hot_encoder", OneHotEncoder(handle_unknown="ignore")),
+    ])
+    num_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="mean")),
+        ("standard_scaler", StandardScaler()),
+    ])
+    categorical_preprocessing = ColumnTransformer([
+        ("categorical_preproc", cat_pipeline, cat_cols),
+        ("numerical_preproc", num_pipeline, num_cols),
+    ])
+
+    model = Pipeline([
+        ("categorical_preproc", categorical_preprocessing),
+        ("classifier", LogisticRegression(C=100, max_iter=1000)),
+    ])
+    return model
+
 
 
 # ============================================================
