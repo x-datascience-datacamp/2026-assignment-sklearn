@@ -1,3 +1,4 @@
+
 """Assignment - a sklearn Pipeline and CV splitter for churn prediction.
 
 Context
@@ -91,9 +92,16 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 
 # ============================================================
@@ -129,7 +137,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +160,44 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError(
+                "registration_month must have datetime dtype."
+            )
+
+        if y is None:
+            raise ValueError("y must be provided to check both classes.")
+
+        y = np.asarray(y)
+
+        if len(y) != len(X):
+            raise ValueError("X and y must have the same number of rows.")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+
+        for month in unique_months:
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == next_month)
+
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,7 +216,76 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+
+    categorical_features = [
+        "gender",
+        "level",
+    ]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="most_frequent"),
+            ),
+            (
+                "encoder",
+                OneHotEncoder(handle_unknown="ignore"),
+            ),
+        ]
+    )
+
+    numerical_transformer = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="median"),
+            ),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorical",
+                categorical_transformer,
+                categorical_features,
+            ),
+            (
+                "numerical",
+                numerical_transformer,
+                numerical_features,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    classifier = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=8,
+        min_samples_leaf=3,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", classifier),
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
