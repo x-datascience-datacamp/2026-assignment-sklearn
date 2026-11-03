@@ -95,6 +95,11 @@ import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 
 # ============================================================
 # Question 1
@@ -128,8 +133,41 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X.columns:
+            raise ValueError(
+                "X must be a pandas DataFrame with a 'registration_month' column.'"
+            )
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "'registration_month' column must be of datetime dtype."
+            )
+
+        months = X["registration_month"].dt.to_period("M").sort_values().unique()
+        n_splits = 0
+        for i in range(len(months)-1):
+            train_month = months[i]
+            test_month = months[i+1]
+            train_idx = X.index[
+                X["registration_month"].dt.to_period("M") == train_month
+                ]
+            test_idx = X.index[
+                X["registration_month"].dt.to_period("M") == test_month
+                ]
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+            if y is not None:
+                y_train = pd.Series(y).loc[train_idx]
+                y_test = pd.Series(y).loc[test_idx]
+                if not(
+                    0 in y_train.values
+                    and 1 in y_train.values
+                    and 0 in y_test.values
+                    and 1 in y_test.values
+                    ):
+                    continue
+            n_splits += 1
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +189,41 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X.columns:
+            raise ValueError(
+                "X must be a pandas DataFrame with a 'registration_month' column.'"
+            )
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "'registration_month' column must be of datetime dtype."
+            )
+
+        months = X["registration_month"].dt.to_period("M").sort_values().unique()
+
+        for i in range(len(months)-1):
+            train_month = months[i]
+            test_month = months[i+1]
+            train_idx = X.index[
+                X["registration_month"].dt.to_period("M") == train_month
+                ]
+            test_idx = X.index[
+                X["registration_month"].dt.to_period("M") == test_month
+                ]
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+            if y is not None:
+                y_train = pd.Series(y).loc[train_idx]
+                y_test = pd.Series(y).loc[test_idx]
+                if not(
+                    0 in y_train.values
+                    and 1 in y_train.values
+                    and 0 in y_test.values
+                    and 1 in y_test.values
+                    ):
+                    continue
+
+            yield train_idx.to_numpy(), test_idx.to_numpy()
 
 
 # ============================================================
@@ -170,8 +241,46 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender", "level"]
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numerical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    categorical_transformer = OneHotEncoder(
+        handle_unknown="ignore", sparse_output=False
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numerical_transformer, numerical_cols),
+            ("cat", categorical_transformer, categorical_cols),
+        ]
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(
+                random_state=42, n_estimators=100, max_depth=5
+                )
+                )
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
