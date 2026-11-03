@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return X['registration_month'].nunique()-1
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,18 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError('not datetimes')
+        n_samples = X.shape[0]
+        all_indices = np.arange(n_samples)
+        months = X['registration_month'].unique()
+        for i in range(len(months)-1):
+            train_mask = (X['registration_month'] == months[i])
+            test_mask = (X['registration_month'] == months[i+1])
+            idx_test = all_indices[test_mask]
+            idx_train = all_indices[train_mask]
+            if len(np.unique(y[idx_test])) > 1 and len(np.unique(y[idx_train])) > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +185,30 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    num_transformer = SimpleImputer(strategy='mean')
+    cat_transformer = OneHotEncoder(handle_unknown='ignore')
+    num_cols = [
+        'total_events',
+        'rate_songs',
+        'rate_thumbs_up',
+        'rate_thumbs_down',
+        'rate_errors',
+        'n_sessions',
+        'has_downgraded',
+    ]
+    cat_cols = ['gender', 'level']
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', num_transformer, num_cols),
+            ('cat', cat_transformer, cat_cols)
+        ]
+    )
+    pipeline = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('model', RandomForestClassifier(n_estimators=300, max_depth=5))
+    ])
+
+    return pipeline
 
 
 # ============================================================
@@ -192,6 +229,7 @@ if __name__ == "__main__":
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
     for i, (tr, te) in enumerate(cv.split(X, y)):
+        print(tr, te)
         m_tr = train.iloc[tr]["registration_month"].dt.to_period("M").unique()
         m_te = train.iloc[te]["registration_month"].dt.to_period("M").unique()
         churn_tr = y.iloc[tr].mean()
