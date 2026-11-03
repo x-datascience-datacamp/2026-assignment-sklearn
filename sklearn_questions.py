@@ -98,9 +98,9 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.preprocessing import OrdinalEncoder
+from sklearn.svm import SVC
 from sklearn.utils.validation import check_consistent_length
 from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier
 
 
 # ============================================================
@@ -236,7 +236,7 @@ def get_estimator():
 
     model = Pipeline([
         ("categorical_preproc", categorical_preprocessing),
-        ("classifier", RandomForestClassifier(n_estimators=10))
+        ("classifier", SVC(probability=True))
     ])
     return model
 
