@@ -92,6 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
 
 from sklearn.model_selection import BaseCrossValidator
 
@@ -129,7 +136,22 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError("'registration_month' must be of datetime dtype.")
+
+        months = X['registration_month'].dt.to_period('M')
+        y = np.asarray(y)
+
+        n_splits = 0
+        for m in sorted(months.unique()):
+            y_train = y[(months == m).to_numpy()]
+            y_test = y[(months == m + 1).to_numpy()]
+            if np.unique(y_train).size == 2 and np.unique(y_test).size == 2:
+                n_splits += 1
+
+        return n_splits
+
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,26 +174,70 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError("'registration_month' must be of datetime dtype.")
+
+        months = X['registration_month'].dt.to_period('M')
+        y = np.asarray(y)
+
+        for m in sorted(months.unique()):
+            idx_train = np.flatnonzero((months == m).to_numpy())
+            idx_test = np.flatnonzero((months == m + 1).to_numpy())
+            if (np.unique(y[idx_train]).size == 2
+                    and np.unique(y[idx_test]).size == 2):
+                yield idx_train, idx_test
+
 
 
 # ============================================================
 # Question 2
 # ============================================================
 
+
+
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
     The pipeline is trained on the feature columns of ``churn_train.csv``
     (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    The column ``cancel_initiated`` is also ignored: it is not available at
+    prediction time (it is 0 for every user in the test set), so using it
+    would leak the target.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ['gender', 'level']
+    numerical_cols = [
+        'total_events',
+        'rate_songs',
+        'rate_thumbs_up',
+        'rate_thumbs_down',
+        'rate_errors',
+        'n_sessions',
+        'has_downgraded',
+    ]
+
+    categorical_transformer = OneHotEncoder(handle_unknown='ignore')
+    numerical_transformer = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler()),
+    ])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('cat', categorical_transformer, categorical_cols),
+            ('num', numerical_transformer, numerical_cols),
+        ],
+        remainder='drop',
+    )
+
+    return Pipeline([
+        ('preprocessor', preprocessor),
+        ('classifier', LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
