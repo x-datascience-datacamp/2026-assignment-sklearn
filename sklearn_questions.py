@@ -92,28 +92,30 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 
 # ============================================================
 # Question 1
 # ============================================================
 
+
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
-
     Expects the input DataFrame to contain a ``registration_month`` column of
     datetime dtype.  Each fold trains on users who registered in month M and
     evaluates on users who registered in the following month M+1.
-
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
-
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
-
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
@@ -122,18 +124,16 @@ class RegistrationSplit(BaseCrossValidator):
             Target values.  Used to check that both classes are present.
         groups : array-like of shape (n_samples,)
             Always ignored, exists for compatibility.
-
         Returns
         -------
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+                # Return the number of valid splits - TODO
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
-
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
@@ -143,7 +143,6 @@ class RegistrationSplit(BaseCrossValidator):
             both classes.
         groups : array-like of shape (n_samples,)
             Always ignored, exists for compatibility.
-
         Yields
         ------
         idx_train : ndarray
@@ -152,7 +151,49 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+
+        if "registration_month" not in X.columns:
+            raise ValueError("Missing registration_month column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must be datetime.")
+
+        if y is None:
+            raise ValueError("y is required to validate the folds.")
+
+        y = np.asarray(y)
+
+        if len(y) != len(X):
+            raise ValueError("X and y must have the same length.")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+
+        for month in unique_months:
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            idx_train = np.flatnonzero(
+                (months == month).to_numpy()
+            )
+            idx_test = np.flatnonzero(
+                (months == next_month).to_numpy()
+            )
+
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+
+            yield idx_train, idx_test
+
 
 
 # ============================================================
@@ -161,17 +202,53 @@ class RegistrationSplit(BaseCrossValidator):
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
-
     The pipeline is trained on the feature columns of ``churn_train.csv``
     (all columns except ``user_id``, ``registration_month``, and ``churn``).
-
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical_features = ["gender", "level"]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+    ]
+
+    categorical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(
+            handle_unknown="ignore",
+            sparse_output=False,
+        )),
+    ])
+
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("cat", categorical_pipeline, categorical_features),
+        ("num", numerical_pipeline, numerical_features),
+    ])
+
+    estimator = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", HistGradientBoostingClassifier(
+            max_iter=200,
+            learning_rate=0.05,
+            random_state=42,
+        )),
+    ])
+
+    return estimator
+
 
 
 # ============================================================
