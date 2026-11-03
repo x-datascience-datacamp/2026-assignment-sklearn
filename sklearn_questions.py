@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -110,6 +116,39 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    @staticmethod
+    def _get_months(X):
+        """Return the year-month period of each sample.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Training data, must contain a ``registration_month`` column of
+            datetime dtype.
+
+        Returns
+        -------
+        months : pandas.Series of pandas.Period
+            The registration month of each sample, with a reset index so
+            that positions match ``iloc`` positions.
+
+        Raises
+        ------
+        ValueError
+            If ``registration_month`` is missing or not of datetime dtype.
+        """
+        if "registration_month" not in X.columns:
+            raise ValueError(
+                "X must contain a 'registration_month' column."
+            )
+        reg = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(reg):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime "
+                f"dtype, got {reg.dtype}."
+            )
+        return reg.dt.to_period("M").reset_index(drop=True)
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +167,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +189,22 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        months = self._get_months(X)
+        y = np.asarray(y)
+        unique_months = sorted(months.unique())
+
+        for month in unique_months:
+            next_month = month + 1
+            if next_month not in unique_months:
+                continue
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == next_month)
+            # Keep the fold only if both classes appear on both sides.
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -165,13 +217,40 @@ def get_estimator():
     The pipeline is trained on the feature columns of ``churn_train.csv``
     (all columns except ``user_id``, ``registration_month``, and ``churn``).
 
+    ``cancel_initiated`` is deliberately excluded: in the training data it is
+    identical to the target (visiting the cancellation page *is* churning),
+    but for new users it is always 0 at prediction time, so it would leak the
+    target during training and be useless in production.
+
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender", "level"]
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    preprocessor = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
+        ("num", numerical_pipeline, numerical_cols),
+    ])
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
