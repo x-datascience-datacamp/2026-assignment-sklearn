@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,18 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have datetime dtype.")
+
+        months = X["registration_month"].dt.to_period("M")
+        labels = np.asarray(y)
+        for month in sorted(months.unique()):
+            train = np.flatnonzero(months == month)
+            test = np.flatnonzero(months == month + 1)
+            if (np.unique(labels[train]).size == 2
+                    and np.unique(labels[test]).size == 2):
+                yield train, test
 
 
 # ============================================================
@@ -170,8 +185,23 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+
+    # Exclude cancel_initiated: it duplicates the target in the training data.
+    numerical = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded"
+    ]
+    preprocessing = ColumnTransformer([
+        ("categorical", OneHotEncoder(handle_unknown="ignore"),
+         ["gender", "level"]),
+        ("numerical", SimpleImputer(strategy="median"), numerical),
+    ])
+    return Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", RandomForestClassifier(
+            n_estimators=300, min_samples_leaf=3, random_state=0, n_jobs=-1
+        )),
+    ])
 
 
 # ============================================================
