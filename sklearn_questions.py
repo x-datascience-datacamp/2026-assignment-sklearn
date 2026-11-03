@@ -94,7 +94,11 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.preprocessing import OrdinalEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.compose  import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 
 # ============================================================
 # Question 1
@@ -130,6 +134,20 @@ class RegistrationSplit(BaseCrossValidator):
         """
         # Return the number of valid splits - TODO
         ...
+        if "registration_month" not in X:
+            raise ValueError("X must contain a 'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("The column 'registration_month' must have datetime dtype")
+        if y is None:
+            raise ValueError("y must be provided to check for both classes.")
+        months = X["registration_month"].dt.to_period("M")
+        n_splits = 0
+        for month in sorted(months.dropna().unique()):
+            train_mask = (months == month)
+            test_mask = (months == month + 1)
+            if (y[train_mask].nunique() == 2 and y[test_mask].nunique() == 2):
+                n_splits += 1
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -153,6 +171,22 @@ class RegistrationSplit(BaseCrossValidator):
         """
         # Split into monthly registration folds - TODO
         ...
+        if "registration_month" not in X:
+            raise ValueError("X must contain a 'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("The column 'registration_month' must have datetime dtype")
+        if y is None:
+            raise ValueError("y must be provided to check for both classes.")
+
+        months = X["registration_month"].dt.to_period("M")
+        for month in sorted(months.dropna().unique()):
+            train_mask = months == month
+            test_mask = (months == month + 1)
+            idx_train = train_mask[train_mask].index.to_numpy(dtype=int)
+            idx_test = test_mask[test_mask].index.to_numpy(dtype=int)
+
+            if (y.iloc[idx_train].nunique() == 2 and y.iloc[idx_test].nunique() == 2):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -172,7 +206,27 @@ def get_estimator():
     """
     # TODO
     ...
+    cat_cols = ['gender', 'level']
+    num_cols = ['total_events', 'rate_songs', 'rate_thumbs_up', 'rate_thumbs_down',
+                'rate_errors', 'n_sessions']
 
+    cat_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy='constant', fill_value='missing')),
+        ("ordinal_encoder", OrdinalEncoder())
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("categorical_preproc", cat_pipeline, cat_cols),
+        ("numerical_preproc", SimpleImputer(), num_cols)
+
+    ])
+
+    model = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier",  RandomForestClassifier(n_estimators=100, max_depth=3,
+                                               criterion="log_loss", random_state=0))
+    ])
+    return model
 
 # ============================================================
 # Script to test the objects implemented in this file.
