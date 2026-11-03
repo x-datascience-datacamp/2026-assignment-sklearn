@@ -96,9 +96,9 @@ import pandas as pd
 
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
-from sklearn.preprocessing import OrdinalEncoder
-from sklearn.svm import SVC
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.utils.validation import check_consistent_length
 from sklearn.pipeline import Pipeline
 
@@ -211,32 +211,36 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    The pipeline excludes ``user_id``, ``registration_month``, ``churn``,
+    and the leaking feature ``cancel_initiated``. Regularization strength
+    was selected using monthly cross-validation with ``RegistrationSplit``.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    cat_cols = ['gender','level','has_downgraded','cancel_initiated']
-    num_cols=   ['total_events','rate_songs',
-                'rate_thumbs_up','rate_thumbs_down','rate_errors','n_sessions',]
+    cat_cols = ["gender", "level", "has_downgraded"]
+    num_cols = [
+        "total_events", "rate_songs", "rate_thumbs_up",
+        "rate_thumbs_down", "rate_errors", "n_sessions",
+    ]
     cat_pipeline = Pipeline([
-    ("imputer", SimpleImputer(strategy='constant', fill_value='missing')),
-    ("ordinal_encoder", OrdinalEncoder())
-        ])
+        ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+        ("one_hot_encoder", OneHotEncoder(handle_unknown="ignore")),
+    ])
     num_pipeline = Pipeline([
-        ("imputer", SimpleImputer(strategy='mean')),
-            ])
+        ("imputer", SimpleImputer(strategy="mean")),
+        ("standard_scaler", StandardScaler()),
+    ])
     categorical_preprocessing = ColumnTransformer([
         ("categorical_preproc", cat_pipeline, cat_cols),
-        ("numerical_preproc", num_pipeline, num_cols)
+        ("numerical_preproc", num_pipeline, num_cols),
     ])
 
     model = Pipeline([
         ("categorical_preproc", categorical_preprocessing),
-        ("classifier", SVC(probability=True, random_state=42))
+        ("classifier", LogisticRegression(C=100, max_iter=1000)),
     ])
     return model
 
