@@ -94,6 +94,11 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +133,37 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have a datetime dtype")
+        n_splits = 0
+        pairs = []
+        months = X["registration_month"].dt.to_period("M")
+        order = months.argsort().to_numpy()
+        months = months.iloc[order].reset_index(drop=True)
+        labels = pd.Series(y).iloc[order].reset_index(drop=True)
+        if len(months) == 0:
+            return 0
+        initial_month = months.iloc[0]
+
+        i = 0
+        while i < len(X):
+            churn0_lastmonth = False
+            churn1_lastmonth = False
+            while i < len(X) and months.iloc[i] == initial_month:
+                if labels.iloc[i] == 1:
+                    churn1_lastmonth = True
+                if labels.iloc[i] == 0:
+                    churn0_lastmonth = True
+                i += 1
+            if churn0_lastmonth and churn1_lastmonth:
+                pairs.append(1)
+            else:
+                pairs.append(0)
+            initial_month += 1
+        for i in range(len(pairs) - 1):
+            if pairs[i] == 1 and pairs[i + 1] == 1:
+                n_splits += 1
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +185,43 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have a datetime dtype")
+        months = X["registration_month"].dt.to_period("M")
+        labels = pd.Series(y).reset_index(drop=True)
+        order = months.argsort().to_numpy()
+        i = 0
+        while i < len(X):
+            actual_month = months.iloc[order[i]]
+            idx_train = []
+            idx_test = []
+            churn0_train = False
+            churn1_train = False
+            while i < len(X) and months.iloc[order[i]] == actual_month:
+                position = int(order[i])
+                idx_train.append(position)
+                if labels.iloc[position] == 0:
+                    churn0_train = True
+                if labels.iloc[position] == 1:
+                    churn1_train = True
+                i += 1
+
+            j = i
+            churn0_test = False
+            churn1_test = False
+            while j < len(X) and months.iloc[order[j]] == actual_month + 1:
+                position = int(order[j])
+                idx_test.append(position)
+                if labels.iloc[position] == 0:
+                    churn0_test = True
+                if labels.iloc[position] == 1:
+                    churn1_test = True
+                j += 1
+            if churn0_train and churn1_train and churn0_test and churn1_test:
+                yield (
+                    pd.Series(idx_train, dtype="int64").to_numpy(),
+                    pd.Series(idx_test, dtype="int64").to_numpy()
+                )
 
 
 # ============================================================
@@ -170,8 +239,24 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_columns = ["gender", "level"]
+    numerical_columns = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded"
+    ]
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler())
+    ])
+    preprocessing = ColumnTransformer([
+        ("categorical", OneHotEncoder(handle_unknown="ignore"),
+         categorical_columns),
+        ("numerical", numerical_pipeline, numerical_columns)
+    ], remainder="drop")
+    return Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", LogisticRegression(max_iter=1000))
+    ])
 
 
 # ============================================================
