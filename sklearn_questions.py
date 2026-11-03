@@ -236,7 +236,7 @@ def get_estimator():
 
     model = Pipeline([
         ("categorical_preproc", categorical_preprocessing),
-        ("classifier", SVC(random_state=42))
+        ("classifier", SVC(probability=True, random_state=42))
     ])
     return model
 
