@@ -92,9 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.neural_network import MLPClassifier
 
 # ============================================================
 # Question 1
@@ -128,7 +133,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
+        return sum(1 for _ in self.split(X, y, groups))
         ...
 
     def split(self, X, y, groups=None):
@@ -151,13 +156,32 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]):
+
+                raise ValueError("registration_month must be datetime")
+
+        months = X["registration_month"].dt.to_period("M")
+        y = np.asarray(y)
+
+        for month in np.unique(months):
+            idx_train = np.where(months == month)[0]
+            idx_test = np.where(months == month + 1)[0]
+
+            # Check that both classes are present in train and test
+            if (
+                len(np.unique(y[idx_train])) == 2
+                and len(np.unique(y[idx_test])) == 2
+            ):
+                yield idx_train, idx_test
+
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,8 +194,35 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+
+
+    # Define the categorical and numerical columns
+    categorical_cols = ["gender", "level"]
+    numerical_cols = ["total_events", "rate_songs", "rate_thumbs_up",
+                      "rate_thumbs_down", "rate_errors", "n_sessions",
+                      "has_downgraded", "cancel_initiated"]
+
+    categorical_pipeline = make_pipeline(
+        SimpleImputer(strategy="most_frequent"),
+        OneHotEncoder(handle_unknown="ignore")
+    )
+
+    numerical_pipeline = make_pipeline(
+        SimpleImputer(strategy="mean"),
+        StandardScaler()
+    )
+
+
+    # Create the ColumnTransformer
+    preprocessor = ColumnTransformer([("num", numerical_pipeline, numerical_cols),
+                                      ("cat", categorical_pipeline, categorical_cols)])
+
+    pipeline = make_pipeline(preprocessor,
+                             MLPClassifier(hidden_layer_sizes=(100,),
+                                           activation='relu',
+                                           max_iter=1000, random_state=42))
+
+    return pipeline
 
 
 # ============================================================
