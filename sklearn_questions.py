@@ -92,8 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +133,50 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
+
         # Return the number of valid splits - TODO
         ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                f"Column 'registration_month' must be of datetime dtype, "
+                f"got {X['registration_month'].dtype} instead."
+            )
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+
+        n_splits=0
+        reg_month = X["registration_month"].dt.to_period("M")
+        months=sorted(reg_month.unique())
+        if len(months)<2:
+            return 0
+        for m in months:
+            m_next=m+1
+            mask_train = reg_month == m
+            mask_test = reg_month == m_next
+            if m_next not in months:
+                continue
+            if y is not None:
+                y_train = y[mask_train]
+                y_test = y[mask_test]
+
+                # Doit contenir à la fois 0 et 1 (au moins 2 classes distinctes)
+                has_both_train = (
+                    len(set(y_train)) >= 2 if hasattr(y_train, "__iter__") else False
+                )
+                has_both_test = (
+                    len(set(y_test)) >= 2 if hasattr(y_test, "__iter__") else False
+                )
+
+                if has_both_train and has_both_test:
+                    n_splits += 1
+            else:
+                # Si pas de y disponible, on compte simplement la paire consécutive
+                n_splits += 1
+
+        return n_splits
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -153,8 +200,45 @@ class RegistrationSplit(BaseCrossValidator):
         """
         # Split into monthly registration folds - TODO
         ...
+        if not isinstance(X, pd.DataFrame):
+                    raise ValueError("X must be a pandas DataFrame.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+                    raise ValueError(
+                        f"Column 'registration_month' must be of datetime dtype, "
+                        f"got {X['registration_month'].dtype} instead."
+                    )
+        if "registration_month" not in X.columns:
+                    raise ValueError("X must contain a 'registration_month' column.")
 
+        # Convert to monthly periods
+        reg_month = X["registration_month"].dt.to_period("M")
+        months = sorted(reg_month.unique())
 
+        if len(months) < 2:
+            return
+
+        y = np.asarray(y)
+
+        for m in months:
+            m_next = m + 1
+            if m_next not in months:
+                continue
+
+            # Boolean masks matching the month
+            mask_train = (reg_month == m).to_numpy()
+            mask_test = (reg_month == m_next).to_numpy()
+            # Check target distribution
+            y_train = y[mask_train]
+            y_test = y[mask_test]
+
+            has_both_train = len(np.unique(y_train)) >= 2
+            has_both_test = len(np.unique(y_test)) >= 2
+
+            # Only yield if both train and test have >= 1 churner and >= 1 non-churner
+            if has_both_train and has_both_test:
+                idx_train = np.flatnonzero(mask_train)
+                idx_test = np.flatnonzero(mask_test)
+                yield idx_train, idx_test
 # ============================================================
 # Question 2
 # ============================================================
@@ -170,8 +254,68 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    # 1. Define categorical columns
+    categorical_cols = ["gender", "level"]
+
+    # 2. Pipeline for categorical variables
+    categorical_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+        ]
+    )
+
+    # 3. Pipeline for numerical variables (all remaining feature columns)
+    numerical_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+    cols_to_ignore = {
+        "user_id",
+        "registration_month",
+        "churn",
+        "cancel_initiated",
+    }
+    def num_selector(df):
+        return [
+            col
+            for col in df.columns
+            if col not in cols_to_ignore
+            and col not in categorical_cols
+            and (
+                df[col].dtype.kind in "iufb"
+            )  # integer, unsigned int, float, bool
+        ]
+    # 4. Combine transformers
+    # remainder=numerical_pipeline automatically directs all other feature
+    # columns (which are numerical) to the numerical pipeline without needing
+    # hardcoded column names at import time.
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", categorical_pipeline, categorical_cols),
+            ("num", numerical_pipeline, num_selector),
+        ],
+        remainder="drop",
+    )
+
+    # 5. Full Pipeline ending with a competitive classifier
+    classifier = HistGradientBoostingClassifier(
+        max_iter=150,
+        learning_rate=0.05,
+        max_leaf_nodes=31,
+        min_samples_leaf=20,
+        class_weight="balanced",
+        random_state=42,
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", classifier),
+        ]
+    )
 
 
 # ============================================================
