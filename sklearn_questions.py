@@ -229,7 +229,7 @@ def get_estimator():
     ]
     categorical_features = ["gender", "level"]
 
-    # Pour une régression logistique, le scaling des variables numériques est recommandé
+    # scaling fonction logistique
     numeric_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
