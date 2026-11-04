@@ -162,7 +162,7 @@ class RegistrationSplit(BaseCrossValidator):
         for mois in unique_months:
             idx_train=np.flatnonzero(Months==mois)
             idx_test=np.flatnonzero(Months==mois+1)
-            if (y.iloc[idx_train].nunique() == 2 
+            if (y.iloc[idx_train].nunique() == 2
                 and y.iloc[idx_test].nunique() == 2) :
                 yield idx_train,idx_test
 
@@ -198,8 +198,6 @@ def get_estimator():
     return Pipeline([
         ("processor",processor),
         ("classifier",LogisticRegression())])
-    
-
 
 # ============================================================
 # Script to test the objects implemented in this file.
