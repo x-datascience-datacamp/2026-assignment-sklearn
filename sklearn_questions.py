@@ -92,8 +92,15 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -129,6 +136,14 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
+
+        count = 0
+        for _ in self.split(X, y, groups):
+            count += 1 #if文は不要(yieldしないターンはスキップされる)
+        return count
+
+
+
         ...
 
     def split(self, X, y, groups=None):
@@ -154,6 +169,21 @@ class RegistrationSplit(BaseCrossValidator):
         # Split into monthly registration folds - TODO
         ...
 
+        dates = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError("registration_month ,must be a datetime column")
+
+        months = dates.dt.to_period("M")
+        labels = np.asarray(y)
+
+        for month in sorted(months.dropna().unique()):
+            idx_train = np.flatnonzero(months == month) #
+            idx_test = np.flatnonzero(months == month + 1) #
+
+            if set(labels[idx_train]) == {0, 1} and set(labels[idx_test]) == {0, 1}:
+                yield idx_train, idx_test
+
+
 
 # ============================================================
 # Question 2
@@ -172,6 +202,31 @@ def get_estimator():
     """
     # TODO
     ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numeric_steps = Pipeline([
+        ("impute", SimpleImputer(strategy="median")),
+        ("scale", StandardScaler()),
+    ])
+
+    preprocess = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ("num", numeric_steps, numerical),
+    ])
+
+    return Pipeline([
+        ("preprocess", preprocess),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
@@ -184,6 +239,11 @@ if __name__ == "__main__":
     train = pd.read_csv(
         "data/churn_train.csv", parse_dates=["registration_month"]
     )
+
+
+
+    #print(train[["registration_month","churn"]].head())
+    #print(pd.crosstab(train['registration_month'].dt.to_period('M'), train['churn']))
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
