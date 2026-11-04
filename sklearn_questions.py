@@ -91,9 +91,26 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+CATEGORICAL_FEATURES = ["gender", "level"]
+NUMERICAL_FEATURES = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 
 # ============================================================
@@ -110,6 +127,50 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    @staticmethod
+    def _get_months(X):
+        """Return registration months of ``X`` as a monthly PeriodIndex.
+
+        Raises
+        ------
+        ValueError
+            If ``X`` has no ``registration_month`` column or if this column
+            is not of datetime dtype.
+        """
+        if not hasattr(X, "columns") or "registration_month" not in X.columns:
+            raise ValueError(
+                "X must be a DataFrame with a 'registration_month' column."
+            )
+        reg = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(reg):
+            raise ValueError(
+                "'registration_month' must be of datetime dtype, "
+                f"got {reg.dtype}."
+            )
+        return pd.PeriodIndex(reg.dt.to_period("M"))
+
+    def _iter_folds(self, X, y=None):
+        """Yield valid (train, test) index pairs for consecutive months.
+
+        A fold trains on month M and tests on month M + 1. When ``y`` is
+        given, folds where the train or test set lacks one of the two
+        classes are skipped.
+        """
+        months = self._get_months(X)
+        y = None if y is None else np.asarray(y)
+
+        for month in months.unique().sort_values():
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+            if len(idx_test) == 0:
+                continue
+            if y is not None and (
+                np.unique(y[idx_train]).size < 2
+                or np.unique(y[idx_test]).size < 2
+            ):
+                continue
+            yield idx_train, idx_test
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +189,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self._iter_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +211,7 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._iter_folds(X, y)
 
 
 # ============================================================
@@ -169,9 +228,47 @@ def get_estimator():
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
+
+    Notes
+    -----
+    ``cancel_initiated`` is deliberately dropped: in the training data it is
+    identical to the target (users who visited the cancellation page are
+    exactly the churners), but this information is only available once the
+    user is already leaving, so it is always 0 at prediction time (see
+    ``churn_test.csv``). Keeping it would give a near-perfect CV score and a
+    model that is useless in production. ``user_id`` and
+    ``registration_month`` are identifiers / split keys, not features; any
+    column not listed explicitly is dropped by the ``ColumnTransformer``.
+
+    Among logistic regression, random forest and gradient boosting, the
+    logistic regression obtained the best cross-validated ROC-AUC with
+    ``RegistrationSplit``, which is expected given the small number of
+    users and the weak, mostly linear signal of the features.
     """
-    # TODO
-    ...
+    preprocessor = ColumnTransformer(
+        [
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore", drop="if_binary"),
+                CATEGORICAL_FEATURES,
+            ),
+            (
+                "num",
+                make_pipeline(
+                    SimpleImputer(strategy="median"), StandardScaler()
+                ),
+                NUMERICAL_FEATURES,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
