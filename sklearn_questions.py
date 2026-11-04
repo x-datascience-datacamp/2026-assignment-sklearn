@@ -97,14 +97,12 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-import xgboost as xgb
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -141,23 +139,23 @@ class RegistrationSplit(BaseCrossValidator):
             raise ValueError("X must be a pandas Dataframe")
         if "registration_month" not in X.columns:
             raise ValueError("Missing column registration_month")
-        
+
         # Count splits
         months = pd.to_datetime(
             X['registration_month']).dt.to_period('M')
-        
+
         unique_months = sorted(months.dropna().unique())
-        
+
         n_splits = 0
         for month in unique_months:
             next_month = month + 1
             train_idx = np.where(months == month, True, False)
             test_idx = np.where(months == next_month, True, False)
-            if len(np.unique(y.iloc[train_idx])) == 2 and len(np.unique(y.iloc[test_idx])) == 2:
+            if (len(np.unique(y.iloc[train_idx])) == 2
+                    and len(np.unique(y.iloc[test_idx])) == 2):
                 n_splits += 1
-    
-        return n_splits        
-        
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -194,19 +192,21 @@ class RegistrationSplit(BaseCrossValidator):
         # Create splits
         months = pd.to_datetime(
             X['registration_month']).dt.to_period('M')
-        
+
         unique_months = sorted(months.dropna().unique())
-        
+
         for month in unique_months:
             next_month = month + 1
             idx_train = np.where(months == month)[0]
             idx_test = np.where(months == next_month)[0]
-            if len(np.unique(y[idx_train]) == 2) and len(np.unique(y[idx_test]) == 2):
+            if (len(np.unique(y[idx_train]) == 2)
+                    and len(np.unique(y[idx_test]) == 2)):
                 yield idx_train, idx_test
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -220,19 +220,19 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     train_data = pd.read_csv('data/churn_train.csv')
-    columns_rmvd = ['user_id','registration_month',
-                    'churn','cancel_initiated']
+    columns_rmvd = ['user_id', 'registration_month',
+                    'churn', 'cancel_initiated']
     ft_cols = [col for col in train_data
                if col not in columns_rmvd]
-    
+
     # Categorical cols
-    cat_cols = ['gender','level']
-    
+    cat_cols = ['gender', 'level']
+
     # Numerical cols
     num_cols = train_data[ft_cols].select_dtypes(
         include=["int64", "float64"]
     ).columns.tolist()
-    
+
     # Column Transformer
     preprocessor = ColumnTransformer(
             transformers=[
@@ -245,7 +245,7 @@ def get_estimator():
                 ), num_cols)
             ]
         )
-    
+
     # Pipeline
     estimator = Pipeline(
         steps=[
@@ -253,12 +253,13 @@ def get_estimator():
             ("clf", LogisticRegression(C=10))
             ]
     )
-    
+
     return estimator
 
 # ============================================================
 # Script to test the objects implemented in this file.
 # ============================================================
+
 
 if __name__ == "__main__":
     from sklearn.model_selection import cross_validate
@@ -290,4 +291,4 @@ if __name__ == "__main__":
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
     print(f"CV results : {scores.round(3)}")
-    print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
+    print(f"Mean CV AUC : {scores['test_score'].mean():.3f}")
