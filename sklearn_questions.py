@@ -92,8 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 
 # ============================================================
@@ -112,24 +117,23 @@ class RegistrationSplit(BaseCrossValidator):
     """
 
     def get_n_splits(self, X, y=None, groups=None):
-        """Return the number of valid splitting iterations.
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError("registration_month must be a datetime column")
 
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Training data, must contain a ``registration_month`` column.
-        y : array-like of shape (n_samples,), optional
-            Target values.  Used to check that both classes are present.
-        groups : array-like of shape (n_samples,)
-            Always ignored, exists for compatibility.
+        inscription_month = X['registration_month'].dt.to_period('M')
+        possible_months = np.sort(inscription_month.unique())
+        n_splits = 0
 
-        Returns
-        -------
-        n_splits : int
-            The number of valid splits.
-        """
-        # Return the number of valid splits - TODO
-        ...
+        for i in range(len(possible_months) - 1):
+            mask_train = (inscription_month == possible_months[i]).values
+            if len(pd.unique(y[mask_train])) < 2:
+                break
+
+            mask_test = (inscription_month == possible_months[i + 1]).values
+            if len(pd.unique(y[mask_test])) >= 2:
+                n_splits += 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +155,23 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError("registration_month must be a datetime column")
+
+        inscription_month = X['registration_month'].dt.to_period('M')
+        possible_months = np.sort(inscription_month.unique())
+
+        for i in range(len(possible_months) - 1):
+            mask_train = (inscription_month == possible_months[i]).values
+            if len(pd.unique(y[mask_train])) < 2:
+                break
+
+            mask_test = (inscription_month == possible_months[i + 1]).values
+            if len(pd.unique(y[mask_test])) >= 2:
+                idx_train = np.where(mask_train)[0]
+                idx_test = np.where(mask_test)[0]
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +189,47 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_columns = [
+        "gender",
+        "level",
+        "has_downgraded"
+    ]
+
+    numerical_columns = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions"
+    ]
+
+    categorical_pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore"))
+    ])
+
+    numerical_pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="median"))
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("cat", categorical_pipe, categorical_columns),
+        ("num", numerical_pipe, numerical_columns)
+    ])
+
+    classifier = HistGradientBoostingClassifier(
+        max_iter=150,
+        learning_rate=0.05,
+        max_leaf_nodes=15,
+        l2_regularization=5.0,
+        random_state=42
+    )
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", classifier)
+    ])
 
 
 # ============================================================
