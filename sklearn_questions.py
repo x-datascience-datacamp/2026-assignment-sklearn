@@ -59,7 +59,6 @@ be enforced with ``ruff``. You can check that there are no errors by calling
 Finally, you need to write docstrings for the methods you code and for the
 class.
 
-
 Question 2 - get_estimator
 --------------------------
 Implement ``get_estimator()`` so that it returns a scikit-learn ``Pipeline``
@@ -92,9 +91,16 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+import xgboost as xgb
 
 # ============================================================
 # Question 1
@@ -128,8 +134,30 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        # Value Errors
+        if y is None:
+            raise ValueError("y must be provided")
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas Dataframe")
+        if "registration_month" not in X.columns:
+            raise ValueError("Missing column registration_month")
+        
+        # Count splits
+        months = pd.to_datetime(
+            X['registration_month']).dt.to_period('M')
+        
+        unique_months = sorted(months.dropna().unique())
+        
+        n_splits = 0
+        for month in unique_months:
+            next_month = month + 1
+            train_idx = np.where(months == month, True, False)
+            test_idx = np.where(months == next_month, True, False)
+            if len(np.unique(y.iloc[train_idx])) == 2 and len(np.unique(y.iloc[test_idx])) == 2:
+                n_splits += 1
+    
+        return n_splits        
+        
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,9 +179,30 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        # Value Errors
+        if y is None:
+            raise ValueError("y must be provided")
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas Dataframe")
+        if "registration_month" not in X.columns:
+            raise ValueError("Missing column registration_month")
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must be datetime")
 
+        # Create splits
+        months = pd.to_datetime(
+            X['registration_month']).dt.to_period('M')
+        
+        unique_months = sorted(months.dropna().unique())
+        
+        for month in unique_months:
+            next_month = month + 1
+            idx_train = np.where(months == month)[0]
+            idx_test = np.where(months == next_month)[0]
+            if len(np.unique(y[idx_train]) == 2) and len(np.unique(y[idx_test]) == 2):
+                yield idx_train, idx_test
 
 # ============================================================
 # Question 2
@@ -170,9 +219,42 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
-
+    train_data = pd.read_csv('data/churn_train.csv')
+    columns_rmvd = ['user_id','registration_month',
+                    'churn','cancel_initiated']
+    ft_cols = [col for col in train_data
+               if col not in columns_rmvd]
+    
+    # Categorical cols
+    cat_cols = ['gender','level']
+    
+    # Numerical cols
+    num_cols = train_data[ft_cols].select_dtypes(
+        include=["int64", "float64"]
+    ).columns.tolist()
+    
+    # Column Transformer
+    preprocessor = ColumnTransformer(
+            transformers=[
+                ("cat", OneHotEncoder(handle_unknown='ignore'), cat_cols),
+                ("num", Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy='median')),
+                        ("scaler", StandardScaler())
+                    ]
+                ), num_cols)
+            ]
+        )
+    
+    # Pipeline
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("clf", LogisticRegression(C=10))
+            ]
+    )
+    
+    return estimator
 
 # ============================================================
 # Script to test the objects implemented in this file.
