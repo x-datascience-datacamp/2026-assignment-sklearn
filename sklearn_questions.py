@@ -96,7 +96,7 @@ import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -217,7 +217,7 @@ def get_estimator():
                                       ("cat", cat_pipe, cat_cols),],remainder="drop")
     pipeline = Pipeline([("preprocessor", preprocessor),
                          ("classifier",
-                         HistGradientBoostingClassifier(random_state=42))])
+                         LogisticRegression(random_state=42))])
 
     return pipeline
 
