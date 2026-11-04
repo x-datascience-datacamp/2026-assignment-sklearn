@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import make_pipeline
+from sklearn.linear_model import LogisticRegression
+import sklearn.compose
+import sklearn.impute
+import sklearn.preprocessing
 
 
 # ============================================================
@@ -110,7 +116,6 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
-
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
 
@@ -128,8 +133,11 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,13 +159,67 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must be datetime")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+
+        y_array = np.asarray(y)
+
+        if len(y_array) != len(X):
+            raise ValueError("X and y must have the same length")
+
+        for month in unique_months:
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            train_idx = np.flatnonzero(
+                (months == month).to_numpy()
+            )
+            test_idx = np.flatnonzero(
+                (months == next_month).to_numpy()
+            )
+
+            train_classes = set(y_array[train_idx])
+            test_classes = set(y_array[test_idx])
+
+            if train_classes == {0, 1} and test_classes == {0, 1}:
+                yield train_idx, test_idx
+
+
+# ==========================
 
 
 # ============================================================
 # Question 2
 # ============================================================
+'''
+Question 2 - get_estimator
+--------------------------
+Implement ``get_estimator()`` so that it returns a scikit-learn ``Pipeline``
+that can be trained on the feature columns of ``churn_train.csv`` and predict
+churn on unseen users.
+
+Requirements:
+- The pipeline must contain a ``ColumnTransformer`` that handles categorical
+  columns (``gender``, ``level``) and numerical columns separately.
+- Handle missing values in numerical features (``rate_errors`` contains NaN).
+- End with a classifier of your choice.
+- Achieve a ROC-AUC of at least 0.72 on the held-out test set.
+
+ Q2 - Use ``sklearn.compose.ColumnTransformer`` together with
+  ``sklearn.preprocessing.OneHotEncoder`` (for categoricals) and
+  ``sklearn.impute.SimpleImputer`` (for numericals with NaN).
+
+- Q2 - Explore the data first with ``pandas`` before writing the pipeline.
+  Any feature that might be problematic/too correlated with the data?
+'''
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,7 +232,25 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
+
+    model = make_pipeline(
+            sklearn.compose.ColumnTransformer([
+                #Drop the not wanted columns
+                ("drop_columns", "drop",
+                ["cancel_initiated", "user_id", "registration_month"]),
+                #Encodes categorical as one hot
+                ("cat_preprocess",
+                sklearn.preprocessing.OneHotEncoder(handle_unknown='ignore')
+                , ['level', 'gender']),
+                #Removes and standarize numerical data
+                ("Nan_preprocess", make_pipeline(
+                    sklearn.impute.SimpleImputer(),
+                    sklearn.preprocessing.StandardScaler()
+                ), sklearn.compose.make_column_selector(dtype_include='number'))
+            ]),
+            LogisticRegression()
+        )
+    return model
     ...
 
 
