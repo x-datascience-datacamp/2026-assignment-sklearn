@@ -92,9 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
 
 # ============================================================
 # Question 1
@@ -128,8 +132,8 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+
+        return sum(1 for _ in self.split(X,y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +155,17 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+           raise ValueError("registration_month must be of datetime dtype")
+        Months=X["registration_month"].dt.to_period("M")
+        unique_months=sorted(Months.unique())
+        for mois in unique_months:
+            idx_train=np.flatnonzero(Months==mois)
+            idx_test=np.flatnonzero(Months==mois+1)
+            if (y.iloc[idx_train].nunique() == 2
+                and y.iloc[idx_test].nunique() == 2) :
+                yield idx_train,idx_test
+
 
 
 # ============================================================
@@ -170,9 +183,21 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
-
+    cat_col=["gender","level"]
+    num_cols=["total_events","rate_songs","rate_thumbs_up","rate_thumbs_down",
+              "rate_errors","n_sessions","has_downgraded"
+              ]
+    num_pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="mean")),
+        ("scaler", StandardScaler()),
+    ])
+    processor=ColumnTransformer([
+        ("num",num_pipe,num_cols),
+        ("cat",OneHotEncoder(),cat_col)
+    ])
+    return Pipeline([
+        ("processor",processor),
+        ("classifier",LogisticRegression())])
 
 # ============================================================
 # Script to test the objects implemented in this file.
@@ -199,7 +224,7 @@ if __name__ == "__main__":
         print(
             f"Fold {i}: train={sorted(m_tr)} "
             f"(n={len(tr)}, churn={churn_tr:.1%})"
-            f"  →  test={sorted(m_te)} "
+            f"  ->  test={sorted(m_te)} "
             f"(n={len(te)}, churn={churn_te:.1%})"
         )
 
