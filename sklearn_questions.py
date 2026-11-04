@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -110,6 +116,7 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +135,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
+        n_split=len(list(self.split(X,y,groups)))
+        return n_split
         # Return the number of valid splits - TODO
-        ...
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,12 +160,31 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype.")
+
+        y = np.asarray(y)
+        period = X["registration_month"].dt.to_period("M")
+
+        month=period.drop_duplicates().sort_values(ascending=True).values
+        for i in range(len(month)-1):
+            m_train=month[i]
+            m_test=month[i+1]
+            idx_train=np.where(period == m_train)[0]
+            idx_test=np.where(period == m_test)[0]
+            y_train=y[idx_train]
+            y_test=y[idx_test]
+            if len(np.unique(y_train))==2 and len(np.unique(y_test))==2:
+                yield idx_train, idx_test
+
+
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,8 +197,29 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
+
     # TODO
-    ...
+    num_cols=["total_events",
+              "rate_songs",
+              "rate_thumbs_up",
+              "rate_thumbs_down",
+              "rate_errors",
+              "n_sessions",
+              "has_downgraded",]
+
+    cat_cols=["gender", "level"]
+
+    num_pipe=Pipeline([("imputer", SimpleImputer(strategy="median")),
+                         ("scaler", StandardScaler()),])
+    cat_pipe=Pipeline([("imputer", SimpleImputer(strategy="most_frequent")),
+                       ("encoder", OneHotEncoder(handle_unknown="ignore"))])
+    preprocessor = ColumnTransformer([("num", num_pipe, num_cols),
+                                      ("cat", cat_pipe, cat_cols),],remainder="drop")
+    pipeline = Pipeline([("preprocessor", preprocessor),
+                         ("classifier",
+                         HistGradientBoostingClassifier(random_state=42))])
+
+    return pipeline
 
 
 # ============================================================
