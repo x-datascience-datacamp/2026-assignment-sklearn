@@ -92,8 +92,25 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
+
+CATEGORICAL_FEATURES = ["gender", "level"]
+NUMERIC_FEATURES = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 
 # ============================================================
@@ -130,6 +147,7 @@ class RegistrationSplit(BaseCrossValidator):
         """
         # Return the number of valid splits - TODO
         ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -153,6 +171,26 @@ class RegistrationSplit(BaseCrossValidator):
         """
         # Split into monthly registration folds - TODO
         ...
+        column = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(column):
+            raise ValueError("registration_month must be of datetime dtype")
+
+        months = column.dt.to_period("M").to_numpy()
+        y = np.asarray(y)
+
+        for current in sorted(set(months)):
+            idx_train = np.flatnonzero(months == current)
+            idx_test = np.flatnonzero(months == current + 1)
+            if idx_test.size == 0:
+                continue
+            if self._has_both_classes(y[idx_train]) and self._has_both_classes(
+                y[idx_test]
+            ):
+                yield idx_train, idx_test
+
+    @staticmethod
+    def _has_both_classes(y):
+        return np.unique(y).size == 2
 
 
 # ============================================================
@@ -172,6 +210,36 @@ def get_estimator():
     """
     # TODO
     ...
+    categorical = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("oneHot", OneHotEncoder(handle_unknown="ignore"))
+        ]
+    )
+
+    numerical = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scalar", StandardScaler()),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        [
+            ("categorical", categorical, CATEGORICAL_FEATURES),
+            ("numerical", numerical, NUMERIC_FEATURES)
+        ]
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                LogisticRegression(C=10, class_weight="balanced", max_iter=1000)
+            ),
+        ]
+    )
 
 
 # ============================================================
