@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,13 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        df = pd.merge(X[["registration_month"]], y, left_index=True, right_index=True)
+        both = df.groupby("registration_month")["churn"].nunique() == 2
+        res = 0
+        for index in range(len(both) - 1):
+            if both.iloc[index] and both.iloc[index + 1]:
+                res += 1
+        return res
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +162,24 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+
+        months = X["registration_month"].dt.to_period("M").to_numpy()
+        y = np.asarray(y)
+        unique_months = np.sort(np.unique(months))
+
+        for i in range(len(unique_months) - 1):
+            idx_train = np.where(months == unique_months[i])[0]
+            idx_test = np.where(months == unique_months[i + 1])[0]
+
+            # on saute le fold si train ou test n'a pas les deux classes
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +197,33 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical = ["gender", "level"]
+    # cancel_initiated is left out: it leaks the target (always 1 for
+    # churners in train, never available at prediction time).
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+            (
+                "num",
+                make_pipeline(SimpleImputer(), StandardScaler()),
+                numerical,
+            ),
+        ]
+    )
+    est = Pipeline(
+        [("preprocessor", preprocessor), ("clf", LogisticRegression())]
+    )
+    return est
 
 
 # ============================================================
