@@ -92,8 +92,17 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
+
+
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+
 
 
 # ============================================================
@@ -128,8 +137,11 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        n_splits = 0
+        for idx_train, idx_test in self.split(X, y):
+            n_splits = n_splits + 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +163,36 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        dates = X['registration_month']
+
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError('registration_month must be a datetime column')
+
+        # month of registration of each user, for example 2018-06
+        months = dates.dt.to_period('M')
+        all_months = sorted(months.unique())
+
+        y = np.asarray(y)
+
+        for month in all_months:
+            next_month = month + 1
+
+
+            if next_month not in all_months:
+                continue
+
+            is_train = (months == month).to_numpy()
+            is_test = (months == next_month).to_numpy()
+
+            idx_train = np.where(is_train)[0]
+            idx_test = np.where(is_test)[0]
+
+            n_classes_train = len(np.unique(y[idx_train]))
+            n_classes_test = len(np.unique(y[idx_test]))
+            if n_classes_train < 2 or n_classes_test < 2:
+                continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +210,39 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_columns = ['gender', 'level']
+
+    numerical_columns = [
+        'total_events',
+        'rate_songs',
+        'rate_thumbs_up',
+        'rate_thumbs_down',
+        'rate_errors',
+        'n_sessions',
+        'has_downgraded',
+    ]
+
+
+    numerical_pipeline = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler()),
+    ])
+
+    categorical_encoder = OneHotEncoder(handle_unknown='ignore')
+
+    preprocessor = ColumnTransformer([
+        ('categorical', categorical_encoder, categorical_columns),
+        ('numerical', numerical_pipeline, numerical_columns),
+    ])
+
+    model = LogisticRegression(max_iter=1000)
+
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('classifier', model),
+    ])
+
+    return pipeline
 
 
 # ============================================================
