@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import BaseCrossValidator, cross_validate
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.linear_model import LogisticRegression
 
-from sklearn.model_selection import BaseCrossValidator
 
 
 # ============================================================
@@ -110,6 +116,44 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _validate_input(self, X):
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError(
+                "X must be a pandas DataFrame containing 'registration_month'."
+            )
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype."
+            )
+
+    def _get_valid_splits(self, X, y):
+        self._validate_input(X)
+        y = np.asarray(y)
+
+        periods = pd.to_datetime(X["registration_month"]).dt.to_period("M")
+        sorted_months = sorted(periods.unique())
+
+        valid_splits = []
+        for i in range(len(sorted_months) - 1):
+            train_month = sorted_months[i]
+            test_month = sorted_months[i + 1]
+
+            train_idx = np.where(periods == train_month)[0]
+            test_idx = np.where(periods == test_month)[0]
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            y_tr = y[train_idx]
+            y_te = y[test_idx]
+
+            if len(np.unique(y_tr)) > 1 and len(np.unique(y_te)) > 1:
+                valid_splits.append((train_idx, test_idx))
+
+        return valid_splits
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +172,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if y is None:
+            return 0
+        return len(self._get_valid_splits(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,27 +196,66 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        valid_splits = self._get_valid_splits(X, y)
+        for train_idx, test_idx in valid_splits:
+            yield train_idx, test_idx
 
 
 # ============================================================
 # Question 2
 # ============================================================
 
+
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
     The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    (all columns except ``user_id``, ``registration_month``, ``churn``,
+    and ``cancel_initiated`` to prevent data leakage).
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    categorical_features = ["gender", "level"]
+
+    # scaling fonction logistique
+    numeric_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    categorical_transformer = Pipeline(
+        steps=[
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ]
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000, random_state=42)),
+        ]
+    )
 
 
 # ============================================================
@@ -179,16 +263,12 @@ def get_estimator():
 # ============================================================
 
 if __name__ == "__main__":
-    from sklearn.model_selection import cross_validate
-
     train = pd.read_csv(
         "data/churn_train.csv", parse_dates=["registration_month"]
     )
-    # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
 
-    # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
     for i, (tr, te) in enumerate(cv.split(X, y)):
@@ -203,7 +283,6 @@ if __name__ == "__main__":
             f"(n={len(te)}, churn={churn_te:.1%})"
         )
 
-    # ---- cross-validate the estimator ----
     print("\n=== Cross-validation with RegistrationSplit ===")
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
