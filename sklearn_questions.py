@@ -92,9 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 # ============================================================
 # Question 1
@@ -128,8 +132,11 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        # Return the number of valid splits 
+        if X is None or y is None:
+            raise ValueError("X and y are required")
+
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +158,38 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        # Split into monthly registration folds 
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must be datetime")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+
+        y_array = np.asarray(y)
+
+        if len(y_array) != len(X):
+            raise ValueError("X and y must have the same length")
+
+        for month in unique_months:
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            train_idx = np.flatnonzero(
+                (months == month).to_numpy()
+            )
+            test_idx = np.flatnonzero(
+                (months == next_month).to_numpy()
+            )
+
+            train_classes = set(y_array[train_idx])
+            test_classes = set(y_array[test_idx])
+
+            if train_classes == {0, 1} and test_classes == {0, 1}:
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -171,7 +208,67 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical_features = ["gender", "level"]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = Pipeline(
+        steps=[
+            (
+                "encoder",
+                OneHotEncoder(handle_unknown="ignore"),
+            ),
+        ]
+    )
+
+    numerical_transformer = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="median"),
+            ),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorical",
+                categorical_transformer,
+                categorical_features,
+            ),
+            (
+                "numerical",
+                numerical_transformer,
+                numerical_features,
+            ),
+        ]
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                RandomForestClassifier(
+                    n_estimators=300,
+                    min_samples_leaf=2,
+                    class_weight="balanced",
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
