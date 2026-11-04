@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
+from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.impute import SimpleImputer
+
 
 
 # ============================================================
@@ -129,7 +135,22 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("registration month is missing")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration month is not of datetime type")
+
+        reg_month = X["registration_month"].dt.to_period("M")
+        liste_months = X["registration_month"].dt.to_period("M").sort_values().unique()
+        n_splits = 0
+        for k in range(len(liste_months) - 1):
+            train_months = liste_months[k]
+            test_months = liste_months[k+1]
+            train_idx =np.where(reg_month == train_months)[0]
+            test_idx = np.where(reg_month == test_months)[0]
+            if len(y[train_idx].unique())>1 and len(y[test_idx].unique())>1:
+                n_splits+=1
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +173,20 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("registration month is missing")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration month is not of datetime type")
+
+        reg_month = X["registration_month"].dt.to_period("M")
+        liste_months = X["registration_month"].dt.to_period("M").sort_values().unique()
+        for k in range(len(liste_months) - 1):
+            train_months = liste_months[k]
+            test_months = liste_months[k+1]
+            train_idx =np.where(reg_month == train_months)[0]
+            test_idx = np.where(reg_month == test_months)[0]
+            if len(y[train_idx].unique())>1 and len(y[test_idx].unique())>1:
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -171,7 +205,31 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    cat_features = ['gender', 'level']
+    num_features=["total_events",
+                  "rate_songs",
+                  "n_sessions",
+                  "rate_thumbs_up",
+                  "rate_thumbs_down",
+                  "has_downgraded"]
+    num_transform = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler())
+    ])
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", num_transform, num_features),
+            ("cat", OneHotEncoder(),cat_features)
+        ]
+    )
+    pipeline = Pipeline(
+        steps = [("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(
+            random_state = 18,
+            penalty = "l1",
+            solver = "liblinear"))]
+    )
+    return pipeline
 
 
 # ============================================================
