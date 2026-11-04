@@ -130,12 +130,10 @@ class RegistrationSplit(BaseCrossValidator):
         Returns
         -------
         n_splits : int
-            The number of valid splits.
-        """
-        # Return the number of valid splits 
+            The number of valid splits. """
+        # Return the number of valid splits
         if X is None or y is None:
             raise ValueError("X and y are required")
-
         return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
@@ -158,7 +156,7 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds 
+        # Split into monthly registration folds
         if not pd.api.types.is_datetime64_any_dtype(
             X["registration_month"]
         ):
