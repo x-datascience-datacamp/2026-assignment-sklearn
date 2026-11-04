@@ -92,9 +92,15 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from pandas.api.types import is_datetime64_any_dtype as is_datetime
 
 # ============================================================
 # Question 1
@@ -127,9 +133,28 @@ class RegistrationSplit(BaseCrossValidator):
         -------
         n_splits : int
             The number of valid splits.
+
+        Raises
+        ------
+        ValueError
+            If ``registration_month`` is not of datetime dtype.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if X is None or not is_datetime(X["registration_month"]):
+            raise ValueError
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = np.unique(X["registration_month"].dt.to_period("M"))
+        n_splits = 0
+
+        for i in range(len(unique_months)-1):
+            m = unique_months[i]
+            y_train = y[months == m]
+            y_test = y[months == m+1]
+            if len(np.unique(y_train)) == 2 and len(np.unique(y_test)) == 2:
+                n_splits += 1
+
+
+        # Return the number of valid splits -
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -150,10 +175,24 @@ class RegistrationSplit(BaseCrossValidator):
             The training set indices for that split.
         idx_test : ndarray
             The testing set indices for that split.
-        """
-        # Split into monthly registration folds - TODO
-        ...
 
+        Raises
+        ------
+        ValueError
+            If ``registration_month`` is not of datetime dtype.
+        """
+        # Split into monthly registration folds -
+        if X is None or not is_datetime(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = np.unique(months)
+
+        for i in range(len(unique_months)-1):
+            m = unique_months[i]
+            y_train = y[months == m]
+            y_test = y[months == m+1]
+            if len(np.unique(y_train)) == 2 and len(np.unique(y_test)) == 2:
+                yield (np.flatnonzero(months == m),np.flatnonzero(months == m + 1))
 
 # ============================================================
 # Question 2
@@ -170,7 +209,29 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
+    categorical = ["gender", "level"]
+    # ``cancel_initiated`` is excluded: it is perfectly correlated with the
+    # target (it is only known once the user has already left).
+    numerical = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded",
+    ]
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+            (
+                "num",
+                make_pipeline(SimpleImputer(strategy="median"),
+                              StandardScaler()),
+                numerical,
+            ),
+        ],
+        remainder="drop",  # drops user_id, registration_month, cancel_initiated
+    )
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
     ...
 
 
