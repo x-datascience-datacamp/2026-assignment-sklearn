@@ -1,99 +1,13 @@
-"""Assignment - a sklearn Pipeline and CV splitter for churn prediction.
 
-Context
--------
-You are working with event-log data from a music streaming platform. Each row
-in the raw log is one user action (page visited, song played, ...). The goal
-is to predict which users will cancel their subscription (churn).
-
-The file ``data/churn_train.csv`` contains one row per user with aggregated
-features derived from the raw log:
-
-+-------------------+--------------------------------------------+
-| Column            | Description                                |
-+===================+============================================+
-| user_id           | Unique user identifier                     |
-+-------------------+--------------------------------------------+
-| gender            | M / F (categorical)                        |
-+-------------------+--------------------------------------------+
-| level             | Subscription tier: "free" / "paid"         |
-+-------------------+--------------------------------------------+
-| total_events      | log(1 + total number of events)            |
-+-------------------+--------------------------------------------+
-| rate_songs        | Fraction of events that are song plays     |
-+-------------------+--------------------------------------------+
-| rate_thumbs_up    | Fraction of events that are Thumbs-Up      |
-+-------------------+--------------------------------------------+
-| rate_thumbs_down  | Fraction of events that are Thumbs-Down    |
-+-------------------+--------------------------------------------+
-| rate_errors       | Fraction of events that are errors         |
-+-------------------+--------------------------------------------+
-| n_sessions        | Number of distinct sessions                |
-+-------------------+--------------------------------------------+
-| has_downgraded    | 1 if user ever requested a downgrade       |
-+-------------------+--------------------------------------------+
-| cancel_initiated  | 1 if user visited the cancellation page    |
-+-------------------+--------------------------------------------+
-| registration_month| Month the user registered (datetime)      |
-+-------------------+--------------------------------------------+
-| churn             | Target: 1 = churned, 0 = retained          |
-+-------------------+--------------------------------------------+
-
-Question 1 - RegistrationSplit
--------------------------------
-Implement ``RegistrationSplit``, a scikit-learn cross-validator that splits
-users by their ``registration_month`` column.
-
-Each fold trains on users who registered in month M and evaluates on users
-who registered in month M+1, simulating the production setting: you train on
-your existing user base and predict on the cohort that joined next.
-
-Only folds where *both* the training set and the test set contain at least one
-churner and one non-churner are generated (otherwise the fold is useless for
-evaluating churn prediction).
-
-We also ask you to respect the PEP 8 convention: https://pep8.org. This will
-be enforced with ``ruff``. You can check that there are no errors by calling
-``ruff check`` at the root of the repo.
-
-Finally, you need to write docstrings for the methods you code and for the
-class.
-
-
-Question 2 - get_estimator
---------------------------
-Implement ``get_estimator()`` so that it returns a scikit-learn ``Pipeline``
-that can be trained on the feature columns of ``churn_train.csv`` and predict
-churn on unseen users.
-
-Requirements:
-- The pipeline must contain a ``ColumnTransformer`` that handles categorical
-  columns (``gender``, ``level``) and numerical columns separately.
-- Handle missing values in numerical features (``rate_errors`` contains NaN).
-- End with a classifier of your choice.
-- Achieve a ROC-AUC of at least 0.72 on the held-out test set.
-
-Important: not every column should necessarily be used as a feature.
-Think carefully about which columns are truly available at prediction time.
-
-Hints
------
-- Q1 - ``pd.Series.dt.to_period('M')`` converts datetimes to year-month
-  periods that are easy to sort and compare.
-
-- Q1 - Remember to validate that ``registration_month`` is of datetime dtype
-  and raise a ``ValueError`` if not.
-
-- Q2 - Use ``sklearn.compose.ColumnTransformer`` together with
-  ``sklearn.preprocessing.OneHotEncoder`` (for categoricals) and
-  ``sklearn.impute.SimpleImputer`` (for numericals with NaN).
-
-- Q2 - Explore the data first with ``pandas`` before writing the pipeline.
-  Any feature that might be problematic/too correlated with the data?
-"""
+import numpy as np
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
 
 
 # ============================================================
@@ -129,7 +43,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +66,59 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+
+        if "registration_month" not in X.columns:
+            raise ValueError(
+                "X must contain a registration_month column."
+            )
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError(
+                "registration_month must have datetime dtype."
+            )
+
+        if y is None:
+            raise ValueError("y must be provided.")
+
+        y = np.asarray(y)
+
+        if len(X) != len(y):
+            raise ValueError("X and y must have the same number of rows.")
+
+        if pd.isna(X["registration_month"]).any():
+            raise ValueError(
+                "registration_month must not contain missing values."
+            )
+
+        months = X["registration_month"].dt.to_period("M")
+
+        unique_months = sorted(months.unique())
+
+        for month in unique_months:
+            next_month = month + 1
+
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == next_month)
+
+            if len(idx_test) == 0:
+                continue
+
+            y_train = y[idx_train]
+            y_test = y[idx_test]
+
+            # Both sets must contain churners and non-churners.
+            if (
+                np.any(y_train == 0)
+                and np.any(y_train == 1)
+                and np.any(y_test == 0)
+                and np.any(y_test == 1)
+            ):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,7 +137,76 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+
+    categorical_features = [
+        "gender",
+        "level"
+    ]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded"
+    ]
+
+    categorical_transformer = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="most_frequent")
+            ),
+            (
+                "encoder",
+                OneHotEncoder(handle_unknown="ignore")
+            )
+        ]
+    )
+
+    numerical_transformer = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="median")
+            )
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorical",
+                categorical_transformer,
+                categorical_features
+            ),
+            (
+                "numerical",
+                numerical_transformer,
+                numerical_features
+            )
+        ]
+    )
+
+    classifier = RandomForestClassifier(
+        n_estimators=400,
+        max_features="sqrt",
+        min_samples_leaf=3,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", classifier)
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
