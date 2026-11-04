@@ -94,6 +94,13 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+import numpy as np
+
 
 
 # ============================================================
@@ -110,6 +117,28 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def iter_splits(self, X, y=None):
+
+        col = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(col):
+            raise ValueError("registration_month must be of datetime dtype")
+        periods = col.dt.to_period("M")
+        available = set(periods.unique())
+        if y is not None :
+            y = np.asarray(y)
+        for month in sorted(available):
+            nxt = month + 1
+            if nxt not in available :
+                continue
+            idx_train = np.flatnonzero((periods == month).to_numpy())
+            idx_test = np.flatnonzero((periods == nxt).to_numpy())
+            if y is not None and (
+                len(np.unique(y[idx_train])) < 2 or
+                len(np.unique(y[idx_test])) < 2):
+                continue
+            yield idx_train, idx_test
+
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -129,7 +158,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for i in self.iter_splits(X,y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +181,7 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        yield from self.iter_splits(X,y)
 
 
 # ============================================================
@@ -171,7 +200,30 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = ["total_events", "rate_songs",
+                  "rate_thumbs_up", "rate_thumbs_down",
+                  "rate_errors", "n_sessions", "has_downgraded",]
+
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+            (
+                "num",
+                Pipeline([
+                    ("imputer", SimpleImputer(strategy="median")),
+                    ("scaler", StandardScaler()),
+                ]),
+                numerical,
+            ),
+        ],
+        remainder="drop",
+    )
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
+
 
 
 # ============================================================
