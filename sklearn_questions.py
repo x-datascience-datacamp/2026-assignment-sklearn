@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -129,7 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +158,28 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "'registration_month' must be of datetime dtype."
+            )
+
+        months = X['registration_month'].dt.to_period('M')
+        y = np.asarray(y)
+        present = set(months.dropna().unique())
+
+        for month in sorted(present):
+            if month + 1 not in present:
+                continue
+
+            idx_train = np.flatnonzero((months == month).to_numpy())
+            idx_test = np.flatnonzero((months == month + 1).to_numpy())
+
+            if (
+                len(np.unique(y[idx_train])) > 1
+                and len(np.unique(y[idx_test])) > 1
+            ):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,7 +198,30 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = ["total_events", "rate_songs", "rate_thumbs_up",
+                          "rate_thumbs_down", "rate_errors", "n_sessions",
+                          "has_downgraded"]
+
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+            (
+                "num",
+                make_pipeline(SimpleImputer(strategy="mean"), StandardScaler()),
+                numerical_features,
+                ),
+        ]
+    )
+
+    estimator = Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000))
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
