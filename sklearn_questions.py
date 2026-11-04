@@ -211,7 +211,8 @@ def get_estimator():
                   "n_sessions",
                   "rate_thumbs_up",
                   "rate_thumbs_down",
-                  "has_downgraded"]
+                  "has_downgraded",
+                  "rate_errors"]
     num_transform = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler())
@@ -225,9 +226,7 @@ def get_estimator():
     pipeline = Pipeline(
         steps = [("preprocessor", preprocessor),
         ("classifier", LogisticRegression(
-            random_state = 18,
-            penalty = "l1",
-            solver = "liblinear"))]
+            random_state = 42))]
     )
     return pipeline
 
