@@ -94,6 +94,11 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +133,22 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+
+        valid_splits = 0
+
+        for month in sorted(X["registration_month"].dt.to_period("M").unique()):
+            # Get the training and test indices for this month
+            train_idx = X[X["registration_month"].dt.to_period("M") == month].index
+            test_idx = X[X["registration_month"].dt.to_period("M") == (month + 1)].index
+            # Check that train and test both contain the two classes
+            if (
+                y[train_idx].nunique() > 1 and
+                y[test_idx].nunique() > 1
+            ):
+                valid_splits += 1
+
+        return sum(1 for _ in self.split(X, y))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +170,22 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+
+
+        for month in sorted(X["registration_month"].dt.to_period("M").unique()):
+            # Get the training and test indices for this month
+            train_idx = X[X["registration_month"].dt.to_period("M") == month].index
+            test_idx = X[X["registration_month"].dt.to_period("M") == (month + 1)].index
+
+            # Check that train and test both contain the two classes
+            if (
+                y[train_idx].nunique() > 1 and
+                y[test_idx].nunique() > 1
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -170,8 +203,30 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+
+    #Explore the data with pandas
+
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ("num", make_pipeline(SimpleImputer(strategy="median"), StandardScaler()),
+        numerical),
+    ])
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
+
+
+
+
+
 
 
 # ============================================================
