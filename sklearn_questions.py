@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,26 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        month_col = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(month_col):
+            raise ValueError(
+                "registration_month must be of datetime dtype, "
+                f"got {month_col.dtype} instead."
+            )
+
+        months = month_col.dt.to_period("M")
+        all_months = sorted(months.unique())
+        y = np.asarray(y) if y is not None else None
+
+        for month, next_month in zip(all_months, all_months[1:]):
+            idx_train = np.flatnonzero((months == month).to_numpy())
+            idx_test = np.flatnonzero((months == next_month).to_numpy())
+
+            if y is None or (
+                np.unique(y[idx_train]).size == 2
+                and np.unique(y[idx_test]).size == 2
+            ):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +193,43 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore"),
+                categorical,
+            ),
+            (
+                "numerical",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                numerical,
+            ),
+        ]
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocess", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
