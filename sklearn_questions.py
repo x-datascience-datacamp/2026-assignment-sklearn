@@ -91,8 +91,14 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
-import pandas as pd
 
+import pandas as pd
+import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import BaseCrossValidator
 
 
@@ -129,7 +135,8 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +159,20 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have datetime dtype")
+
+        months = X["registration_month"].dt.to_period("M")
+        targets = pd.Series(y)
+
+        for month in sorted(months.dropna().unique()):
+            train_idx = np.where(months == month)[0]
+            test_idx = np.where(months == month + 1)[0]
+
+            if (targets.iloc[train_idx].nunique() == 2
+                    and targets.iloc[test_idx].nunique() == 2):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -162,8 +182,12 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    The pipeline uses categorical and numerical features to predict churn.
+    It excludes user_id and registration_month, as well as cancel_initiated,
+    which causes target leakage because it directly reveals churn in the
+    training dataset.
+    Categorical features are one-hot encoded, while numerical features
+    are imputed and standardized before classification.
 
     Returns
     -------
@@ -171,8 +195,33 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
 
+    # We should exclude cancel_initiated to avoid target leakage
+    # It perfectly predicts churn in training but not for unseen users
+    categorical = ["gender", "level"]
+
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessing = ColumnTransformer([
+        ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ("numerical", Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]), numerical),
+    ])
+
+    return Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 # ============================================================
 # Script to test the objects implemented in this file.
