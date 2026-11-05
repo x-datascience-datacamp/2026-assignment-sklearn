@@ -92,7 +92,7 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
 
 
@@ -128,7 +128,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
+        return len(list(self.split(X, y)))
         ...
 
     def split(self, X, y, groups=None):
@@ -151,13 +151,33 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not 'registration_month' in X.columns or not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError()
+
+        period_month = X['registration_month'].dt.to_period('M')
+
+        unique_months = np.sort(period_month.unique())
+        idx_test = []
+        idx_train = []
+        for i in range(len(unique_months)-1):
+            idx_train = np.where(period_month == unique_months[i])[0]
+            idx_test = np.where(period_month == unique_months[i+1])[0]
+            if y.iloc[idx_train].nunique() > 1 and y.iloc[idx_test].nunique() > 1:
+                yield idx_train, idx_test
+
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,9 +190,31 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cat_cols = ['gender', 'level']
+    num_cols = ['total_events', 'n_sessions', 'rate_songs', 'rate_thumbs_up', 'rate_thumbs_down', 'rate_errors', 'has_downgraded']
 
+    num_pipeline = Pipeline(
+        steps=[
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", num_pipeline, num_cols),
+            ("cat", OneHotEncoder(), cat_cols)
+        ]
+    )
+
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessing", preprocessor),
+            ("classifier", LogisticRegression())
+        ]
+    )
+
+    return pipeline
 
 # ============================================================
 # Script to test the objects implemented in this file.
