@@ -1,3 +1,12 @@
+import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+from sklearn.model_selection import BaseCrossValidator
+
 """Assignment - a sklearn Pipeline and CV splitter for churn prediction.
 
 Context
@@ -91,11 +100,6 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
-import pandas as pd
-
-from sklearn.model_selection import BaseCrossValidator
-
-
 # ============================================================
 # Question 1
 # ============================================================
@@ -128,8 +132,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,9 +154,34 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype."
+            )
 
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.unique())
+
+        if y is not None and not isinstance(y, pd.Series):
+            y = pd.Series(y)
+
+        for i in range(len(unique_months) - 1):
+            m_train = unique_months[i]
+            m_test = unique_months[i + 1]
+
+            train_mask = (months == m_train)
+            test_mask = (months == m_test)
+            train_idx = np.where(train_mask)[0]
+            test_idx = np.where(test_mask)[0]
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            y_train = y.iloc[train_idx]
+            y_test = y.iloc[test_idx]
+
+            if y_train.nunique() == 2 and y_test.nunique() == 2:
+                yield train_idx, test_idx
 
 # ============================================================
 # Question 2
@@ -170,9 +198,36 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
 
+    numeric_transformer = SimpleImputer(strategy="mean")
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numerical_features),
+            ("cat", categorical_transformer, categorical_features),
+        ],
+        remainder="drop",
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(n_estimators=100, random_state=42)),
+        ]
+    )
+
+    return estimator
 
 # ============================================================
 # Script to test the objects implemented in this file.
