@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier
 
 
 # ============================================================
@@ -128,8 +134,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        n_splits = sum(1 for _ in self.split(X, y, groups))
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +158,21 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError("The registration_month column must be of datetime dtype.")
+        y_array = np.asarray(y)
+        periods = X['registration_month'].dt.to_period('M')
+        unique_periods = np.sort(periods.dropna().unique())
+        for train_period in unique_periods:
+            test_period = train_period + 1
+            idx_train = np.where(periods == train_period)[0]
+            idx_test = np.where(periods == test_period)[0]
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+            y_train_fold = y_array[idx_train]
+            y_test_fold = y_array[idx_test]
+            if len(np.unique(y_train_fold)) == 2 and len(np.unique(y_test_fold)) == 2:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +190,28 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = [
+        "total_events", "rate_songs", "rate_thumbs_up",
+        "rate_thumbs_down", "rate_errors", "n_sessions",
+        "has_downgraded"
+    ]
+    categorical_features = ["gender", "level"]
+    numeric_transformer = SimpleImputer(strategy="mean")
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ],
+        remainder="drop"
+    )
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(random_state=42))
+        ]
+    )
+    return pipeline
 
 
 # ============================================================
