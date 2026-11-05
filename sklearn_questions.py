@@ -1,3 +1,4 @@
+
 """Assignment - a sklearn Pipeline and CV splitter for churn prediction.
 
 Context
@@ -48,7 +49,7 @@ Each fold trains on users who registered in month M and evaluates on users
 who registered in month M+1, simulating the production setting: you train on
 your existing user base and predict on the cohort that joined next.
 
-Only folds where *both* the training set and the test set contain at least one
+Only folds where both the training set and the test set contain at least one
 churner and one non-churner are generated (otherwise the fold is useless for
 evaluating churn prediction).
 
@@ -91,9 +92,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
 
 
 # ============================================================
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +157,46 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError(
+                "registration_month must have datetime dtype."
+            )
+
+        if y is None:
+            raise ValueError("y must be provided.")
+
+        months = X["registration_month"].dt.to_period("M")
+        y = np.asarray(y)
+
+        unique_months = months.dropna().unique()
+        unique_months = sorted(unique_months)
+
+        for month in unique_months:
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            idx_train = np.flatnonzero(
+                (months == month).to_numpy()
+            )
+            idx_test = np.flatnonzero(
+                (months == next_month).to_numpy()
+            )
+
+            if (
+                len(np.unique(y[idx_train])) == 2
+                and len(np.unique(y[idx_test])) == 2
+            ):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +214,55 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    numerical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("categorical", categorical_transformer, categorical_features),
+            ("numerical", numerical_transformer, numerical_features),
+        ]
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                RandomForestClassifier(
+                    n_estimators=400,
+                    min_samples_leaf=3,
+                    class_weight="balanced_subsample",
+                    random_state=42,
+                    n_jobs=-1,
+                ),
+            ),
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
