@@ -91,10 +91,14 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
-
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 # ============================================================
 # Question 1
@@ -110,6 +114,52 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _valid_folds(self, X, y=None):
+        """Compute the valid (train, test) index pairs.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Data with a datetime ``registration_month`` column.
+        y : array-like of shape (n_samples,), optional
+            Target values. If None, the two-class check is skipped.
+
+        Returns
+        -------
+        folds : list of tuple of ndarray
+            The (train, test) positional indices of each valid fold.
+
+        Raises
+        ------
+        ValueError
+            If ``registration_month`` is missing or not of datetime dtype.
+        """
+        if (
+            not hasattr(X, "columns")
+            or "registration_month" not in X.columns
+        ):
+            raise ValueError("X must contain a 'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "'registration_month' must be of datetime dtype."
+            )
+
+        months = X["registration_month"].dt.to_period("M").to_numpy()
+        target = None if y is None else np.asarray(y)
+
+        def has_both_classes(idx):
+            return target is None or len(np.unique(target[idx])) == 2
+
+        folds = []
+        for month in sorted(pd.unique(months)):
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+            if has_both_classes(idx_train) and has_both_classes(idx_test):
+                folds.append((idx_train, idx_test))
+        return folds
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +178,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return len(self._valid_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +200,7 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._valid_folds(X, y)
 
 
 # ============================================================
@@ -170,8 +218,61 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    # ``cancel_initiated`` is leakage: visiting the cancellation page is
+    # essentially the churn event, so it is not known before the outcome.
+    # ``user_id`` and ``registration_month`` are identifiers, dropped below.
+    categorical_cols = ["gender", "level"]
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "cat",
+                Pipeline(
+                    [
+                        (
+                            "imputer",
+                            SimpleImputer(strategy="most_frequent"),
+                        ),
+                        (
+                            "onehot",
+                            OneHotEncoder(handle_unknown="ignore"),
+                        ),
+                    ]
+                ),
+                categorical_cols,
+            ),
+            (
+                "num",
+                Pipeline(
+                    [
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                numerical_cols,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocess", preprocessor),
+            (
+                "clf",
+                LogisticRegression(C=0.3, max_iter=1000),
+            ),
+        ]
+    )
 
 
 # ============================================================
