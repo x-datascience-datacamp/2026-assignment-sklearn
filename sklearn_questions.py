@@ -92,6 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+
 
 from sklearn.model_selection import BaseCrossValidator
 
@@ -128,8 +135,40 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+
+        if X is None or y is None:
+            raise ValueError("X and y must be provided")
+
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain registration_month column")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.unique())
+        y_array = np.asarray(y)
+
+        n_splits = 0
+
+        for month in unique_months:
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            idx_train = np.where(months == month)[0]
+            idx_test = np.where(months == next_month)[0]
+
+            if np.unique(y_array[idx_train]).size < 2:
+                continue
+
+            if np.unique(y_array[idx_test]).size < 2:
+                continue
+
+            n_splits += 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -139,7 +178,7 @@ class RegistrationSplit(BaseCrossValidator):
         X : array-like of shape (n_samples, n_features)
             Training data, must contain a ``registration_month`` column.
         y : array-like of shape (n_samples,)
-            Target values.  Used to filter out folds that do not contain
+            Target values. Used to filter out folds that do not contain
             both classes.
         groups : array-like of shape (n_samples,)
             Always ignored, exists for compatibility.
@@ -151,8 +190,43 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+
+        # 1. Validate X
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain registration_month column")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+
+        # 2. Convert dates into monthly periods
+        months = X["registration_month"].dt.to_period("M")
+
+        # 3. Get unique months in chronological order
+        unique_months = sorted(months.unique())
+
+        # 4. Iterate through consecutive calendar months
+        for month in unique_months:
+
+            next_month = month + 1
+
+            if next_month not in unique_months:
+                continue
+
+            # 5. Get training and testing indices
+            idx_train = np.where(months == month)[0]
+            idx_test = np.where(months == next_month)[0]
+
+            y_array = np.asarray(y)
+
+            # 6. Check that both classes exist in both sets
+            if np.unique(y_array[idx_train]).size < 2:
+                continue
+
+            if np.unique(y_array[idx_test]).size < 2:
+                continue
+
+            # 7. Generate the fold
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,9 +244,38 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
 
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore")),
+    ])
+
+    numerical_transformer = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("cat", categorical_transformer, categorical_features),
+        ("num", numerical_transformer, numerical_features),
+    ])
+
+    estimator = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(n_estimators=100, random_state=42)),
+    ])
+
+    return estimator
 
 # ============================================================
 # Script to test the objects implemented in this file.
