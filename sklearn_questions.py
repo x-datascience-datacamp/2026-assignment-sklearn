@@ -94,6 +94,11 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
 
 
 # ============================================================
@@ -110,7 +115,6 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
-
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
 
@@ -128,8 +132,12 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if "datetime" not in str(X["registration_month"].dtype):
+            raise ValueError("Column must be of datetime dtype")
+        if y is not None:
+            return sum(1 for _ in self.split(X, y, groups))
+        return max(X["registration_month"].dt.to_period("M").unique().count() - 1, 0)
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +159,18 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if "datetime" not in str(X["registration_month"].dtype):
+            raise ValueError("Column must be of datetime dtype")
+        months = list(X["registration_month"].dt.to_period("M").unique())
+        idx_test = X[X["registration_month"].dt.to_period("M") == months[0]].index
+        for i in range(1, len(months)):
+            idx_train = idx_test
+            idx_test = X[X["registration_month"].dt.to_period("M") == months[i]].index
+            churn_tr = y.iloc[idx_train].mean()
+            churn_te = y.iloc[idx_test].mean()
+            if (churn_tr<1.)and(churn_tr>0.):
+                if (churn_te>0.)and(churn_te<1.):
+                    yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,9 +188,33 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = ['total_events', 'rate_thumbs_up', 'rate_thumbs_down',
+                        'has_downgraded','n_sessions', 'rate_songs', 'rate_errors']
+    numeric_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler())
+            ]
+        )
 
+    categorical_features = ["gender", "level"]
+    categorical_transformer = Pipeline(
+    steps=[
+        ("encoder", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+    ]
+)
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ]
+    )
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", HistGradientBoostingClassifier())
+            ]
+        ).set_output(transform="pandas")
 
 # ============================================================
 # Script to test the objects implemented in this file.
@@ -187,7 +229,6 @@ if __name__ == "__main__":
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
-
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
@@ -207,5 +248,5 @@ if __name__ == "__main__":
     print("\n=== Cross-validation with RegistrationSplit ===")
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
-    print(f"CV results : {scores.round(3)}")
+    print(f"CV results : \n {scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
