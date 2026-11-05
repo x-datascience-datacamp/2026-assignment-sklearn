@@ -91,9 +91,26 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+CATEGORICAL_COLUMNS = ["gender", "level"]
+NUMERICAL_COLUMNS = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 
 # ============================================================
@@ -128,8 +145,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self._iter_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +167,54 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._iter_folds(X, y)
+
+    def _iter_folds(self, X, y):
+        """Yield (train, test) positional indices for each valid fold.
+
+        A fold trains on the users who registered in month M and tests on
+        the users who registered in the calendar month M+1. Folds are kept
+        only when both sides contain both classes. When ``y`` is None, the
+        class check is skipped.
+        """
+        if not isinstance(X, pd.DataFrame) or (
+            "registration_month" not in X.columns
+        ):
+            raise ValueError(
+                "X must be a DataFrame with a 'registration_month' column."
+            )
+        dates = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype, "
+                f"got {dates.dtype}."
+            )
+        if y is not None:
+            y = np.asarray(y)
+            if len(y) != len(X):
+                raise ValueError(
+                    f"X and y have inconsistent lengths: {len(X)} != {len(y)}."
+                )
+
+        if dates.dt.tz is not None:
+            dates = dates.dt.tz_localize(None)
+        months = dates.dt.to_period("M").to_numpy()
+        for month in sorted(set(months[~pd.isna(months)])):
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+            if len(idx_test) == 0:
+                continue
+            if y is not None and not (
+                _has_both_classes(y[idx_train])
+                and _has_both_classes(y[idx_test])
+            ):
+                continue
+            yield idx_train, idx_test
+
+
+def _has_both_classes(y):
+    """Return True if ``y`` contains at least two distinct labels."""
+    return len(np.unique(y)) >= 2
 
 
 # ============================================================
@@ -163,15 +225,43 @@ def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
     The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    (all columns except ``user_id``, ``registration_month``, ``churn`` and
+    ``cancel_initiated``, which is only known once a user is already
+    leaving, so it leaks the target).
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    # ``cancel_initiated`` is left out on purpose: a user only visits the
+    # cancellation page when already leaving, so it equals ``churn`` in the
+    # training data and is not known for new users at prediction time.
+    # ``user_id`` and ``registration_month`` are not features either. None
+    # of these columns is listed below, so remainder="drop" removes them.
+    preprocessor = ColumnTransformer(
+        [
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore"),
+                CATEGORICAL_COLUMNS,
+            ),
+            (
+                "numerical",
+                make_pipeline(
+                    SimpleImputer(strategy="median"), StandardScaler()
+                ),
+                NUMERICAL_COLUMNS,
+            ),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
