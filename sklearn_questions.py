@@ -91,9 +91,16 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 
 # ============================================================
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,9 +157,28 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError(
+                "The column 'registration_month' must be of datetime dtype."
+            )
 
+        periods = X['registration_month'].dt.to_period('M')
+        unique_periods = periods.sort_values().unique()
+        periods_set = set(unique_periods)
+
+        y_arr = np.asarray(y) if y is not None else None
+
+        for m in unique_periods:
+            if (m + 1) in periods_set:
+                idx_train = np.flatnonzero(periods == m)
+                idx_test = np.flatnonzero(periods == m + 1)
+
+                if y_arr is not None:
+                    if (np.unique(y_arr[idx_train]).size < 2 or
+                            np.unique(y_arr[idx_test]).size < 2):
+                        continue
+
+                yield idx_train, idx_test
 
 # ============================================================
 # Question 2
@@ -170,8 +195,34 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+
+    num_cols = ['rate_songs', 'total_events', 'rate_thumbs_up',
+                'rate_thumbs_down', 'rate_errors', 'n_sessions']
+    cat_cols = ['gender', 'level', 'has_downgraded']
+
+    pipe_cat = Pipeline([
+        ('OneHotEncoder', OneHotEncoder())
+    ])
+
+    pipe_nums = Pipeline([
+        ('SimpleImputer', SimpleImputer()),
+        ('scaling', StandardScaler())
+    ])
+
+    processor = ColumnTransformer(
+        transformers=[
+            ('numeric', pipe_nums, num_cols),
+            ('categorial', pipe_cat, cat_cols)
+        ],
+        remainder='drop'
+    )
+
+    pipe = Pipeline([
+        ('transformer', processor),
+        ('classifier', LogisticRegression(random_state=42))
+    ])
+
+    return pipe
 
 
 # ============================================================
@@ -187,6 +238,8 @@ if __name__ == "__main__":
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
+
+    cv = RegistrationSplit()
 
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
