@@ -91,9 +91,31 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+
+# ============================================================
+# Question 1
+# ============================================================
+
+import numpy as np
+import pandas as pd
+
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -110,6 +132,34 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _get_months(self, X):
+        """Return registration months as monthly periods.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Data containing a ``registration_month`` column.
+
+        Returns
+        -------
+        months : pandas.Series
+            Registration month of each sample as a ``Period('M')``.
+
+        Raises
+        ------
+        ValueError
+            If X is not a DataFrame, lacks ``registration_month``, or if
+            that column is not of datetime dtype.
+        """
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame.")
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+        col = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(col):
+            raise ValueError("'registration_month' must be of datetime dtype.")
+        return col.dt.to_period("M")
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +178,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +200,20 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        months = self._get_months(X)
+        y_arr = None if y is None else np.asarray(y)
+
+        for month in sorted(months.dropna().unique()):
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+            if len(idx_test) == 0:
+                continue
+            if y_arr is not None and not (
+                len(np.unique(y_arr[idx_train])) == 2
+                and len(np.unique(y_arr[idx_test])) == 2
+            ):
+                continue
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -162,17 +223,40 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    ``cancel_initiated`` is excluded on purpose: visiting the cancellation
+    page is part of the churn event itself, so it is not available at
+    prediction time (target leakage). ``user_id`` and ``registration_month``
+    are also dropped.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded",
+    ]
 
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", make_pipeline(
+                SimpleImputer(strategy="most_frequent"),
+                OneHotEncoder(handle_unknown="ignore"),
+            ), categorical),
+            ("num", make_pipeline(
+                SimpleImputer(strategy="median"),
+                StandardScaler(),
+            ), numerical),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 # ============================================================
 # Script to test the objects implemented in this file.
