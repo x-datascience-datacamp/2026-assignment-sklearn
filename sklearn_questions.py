@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
-
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import roc_auc_score
 
 
 # ============================================================
@@ -110,7 +116,6 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
-
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
 
@@ -129,8 +134,26 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
-
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have datetime dtype.")
+        if y is None:
+            raise ValueError("y must be provided.")
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+        n_splits = 0
+        for month in unique_months:
+            next_month = month + 1
+            idx_train = np.flatnonzero((months == month).to_numpy())
+            idx_test = np.flatnonzero((months == next_month).to_numpy())
+            if len(idx_test) == 0:
+                continue
+            y_train = np.asarray(y)[idx_train]
+            y_test = np.asarray(y)[idx_test]
+            if (np.isin([0, 1], y_train).all() and np.isin([0, 1], y_test).all()):
+                n_splits += 1
+        return n_splits
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
 
@@ -152,7 +175,23 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have datetime dtype.")
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+        y = np.asarray(y)
+        for month in unique_months:
+            next_month = month + 1
+            idx_train = np.flatnonzero((months == month).to_numpy())
+            idx_test = np.flatnonzero((months == next_month).to_numpy())
+            if len(idx_test) == 0:
+                continue
+            y_train = y[idx_train]
+            y_test = y[idx_test]
+            if (np.isin([0, 1], y_train).all() and np.isin([0, 1], y_test).all()):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,23 +210,51 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    # cancel_initiated column wil be excluded: it's the same as the churn column
+    # so it can cause the data leakage
+    categorical_cols = ["gender", "level"]
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    categorical_preprocessing = OneHotEncoder(handle_unknown="ignore")
+    numerical_preprocessing = SimpleImputer(strategy="median")
+    preprocessor = ColumnTransformer([
+    ("numerical", numerical_preprocessing, numerical_cols),
+    ("categorical", categorical_preprocessing, categorical_cols)
+]) #cancel_initiated , user_id , registration_month and churn are removed
+    model = RandomForestClassifier(
+        n_estimators=200,
+        random_state=42,
+        class_weight="balanced"
+    )
+    estimator = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", model)
+    ])
+    return estimator
 
 
 # ============================================================
 # Script to test the objects implemented in this file.
 # ============================================================
-
 if __name__ == "__main__":
+    from pathlib import Path
+    import matplotlib.pyplot as plt
+    import seaborn as sns
     from sklearn.model_selection import cross_validate
-
+    DATA_PATH = Path(__file__).parent / "data"
     train = pd.read_csv(
-        "data/churn_train.csv", parse_dates=["registration_month"]
+        DATA_PATH / "churn_train.csv", parse_dates=["registration_month"]
     )
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
-
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
@@ -202,10 +269,46 @@ if __name__ == "__main__":
             f"  →  test={sorted(m_te)} "
             f"(n={len(te)}, churn={churn_te:.1%})"
         )
-
     # ---- cross-validate the estimator ----
     print("\n=== Cross-validation with RegistrationSplit ===")
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
     print(f"CV results : {scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
+    #--exploring the data and the features--
+    numerical_cols = X.select_dtypes(
+        include=["number"]
+    ).columns
+    corr_matrix = X[numerical_cols].corr(method="pearson")
+    plt.figure(figsize=(12, 8))
+    sns.heatmap(
+        corr_matrix,
+        annot=True,
+        cmap="coolwarm",
+        center=0,
+        fmt=".2f"
+    )
+    plt.title("Correlation between numerical features")
+    plt.show()
+    #check if cancel_initiated can lead to data leakage or not
+    print((X["cancel_initiated"].values == y.values).all())
+    for col in ["gender", "level"]:
+        print(f"\n{col}")
+        print(
+            pd.crosstab(
+                X[col],
+                y,
+                normalize="index"
+            )
+        )
+#--Testing on churn_test.csv--
+    test = pd.read_csv(
+    DATA_PATH /"churn_test.csv",
+    parse_dates=["registration_month"])
+    X_test = test.drop(columns=["churn"])
+    y_test = test["churn"]
+    model = get_estimator()
+    model.fit(X, y)
+    y_proba = model.predict_proba(X_test)[:, 1]
+    test_auc = roc_auc_score(y_test, y_proba)
+    print("Held-out Test ROC-AUC:", test_auc)
