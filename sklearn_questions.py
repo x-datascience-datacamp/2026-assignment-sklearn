@@ -91,14 +91,21 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
-import pandas as pd
 
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,13 +157,36 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X:
+            raise ValueError("X must contain a datetime registration_month column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have a datetime dtype.")
+        if y is None:
+            raise ValueError("y is required to verify both churn classes.")
+
+        y_values = np.asarray(y)
+        if len(y_values) != len(X):
+            raise ValueError("X and y must contain the same number of rows.")
+
+        months = X["registration_month"].dt.to_period("M")
+        for month in sorted(months.dropna().unique()):
+            train_idx = np.flatnonzero((months == month).to_numpy())
+            test_idx = np.flatnonzero((months == month + 1).to_numpy())
+            if not len(test_idx):
+                continue
+            if (
+                np.any(y_values[train_idx] == 0)
+                and np.any(y_values[train_idx] == 1)
+                and np.any(y_values[test_idx] == 0)
+                and np.any(y_values[test_idx] == 1)
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,8 +199,37 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "n_sessions",
+        "has_downgraded",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+    ]
+
+    preprocessor = ColumnTransformer([
+        (
+            "categorical",
+            OneHotEncoder(handle_unknown="ignore"),
+            categorical_features
+        ),
+        (
+            "numerical",
+            Pipeline([
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler()),
+            ]),
+            numerical_features
+        )
+    ])
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=2000))
+    ])
 
 
 # ============================================================
@@ -181,9 +239,7 @@ def get_estimator():
 if __name__ == "__main__":
     from sklearn.model_selection import cross_validate
 
-    train = pd.read_csv(
-        "data/churn_train.csv", parse_dates=["registration_month"]
-    )
+    train = pd.read_csv("data/churn_train.csv", parse_dates=["registration_month"])
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
@@ -199,7 +255,7 @@ if __name__ == "__main__":
         print(
             f"Fold {i}: train={sorted(m_tr)} "
             f"(n={len(tr)}, churn={churn_tr:.1%})"
-            f"  →  test={sorted(m_te)} "
+            f"  ->  test={sorted(m_te)} "
             f"(n={len(te)}, churn={churn_te:.1%})"
         )
 
