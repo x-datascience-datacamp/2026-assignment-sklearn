@@ -92,10 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
 from sklearn.model_selection import BaseCrossValidator
-
-
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, RobustScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+import numpy as np
 # ============================================================
 # Question 1
 # ============================================================
@@ -128,8 +132,32 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        X = X.copy()
+        # Return the number of valid splits
+        if 'datetime64' not in str(X['registration_month'].dtype):
+            raise ValueError("ValueError: registration_month " \
+                             "should be a datetime dtype")
+
+        X['registration_month'] = X['registration_month'].dt.to_period('M')
+        months = X['registration_month'].sort_values().unique()
+
+        valid_splits = 0
+        for i in range(len(months)-1):
+            M = months[i]
+            M1= months[i+1]
+            XM = X[X["registration_month"] == M]
+            XM1 = X[X["registration_month"] == M1]
+            yM = y.loc[XM.index]
+            yM1 = y.loc[XM1.index]
+            countsM = yM.value_counts()
+            countsM1 = yM1.value_counts()
+            if ((countsM.loc[0]>=1 and countsM.loc[1]>=1)
+                and
+                (countsM1.loc[0]>=1 and countsM1.loc[1]>=1)):
+                valid_splits+=1
+
+        return valid_splits
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +179,27 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        X = X.copy()
+        if 'datetime64' not in str(X['registration_month'].dtype):
+            raise ValueError("ValueError: registration_month " \
+            "should be a datetime dtype")
+
+        X['registration_month'] = X['registration_month'].dt.to_period('M')
+        months = X['registration_month'].sort_values().unique()
+
+        for i in range(len(months)-1):
+            M = months[i]
+            M1= months[i+1]
+            XM = X[X["registration_month"] == M]
+            XM1 = X[X["registration_month"] == M1]
+            yM = y.loc[XM.index]
+            yM1 = y.loc[XM1.index]
+            countsM = yM.value_counts()
+            countsM1 = yM1.value_counts()
+            if ((countsM.loc[0]>=1 and countsM.loc[1]>=1)
+                and
+                (countsM1.loc[0]>=1 and countsM1.loc[1]>=1)):
+                yield XM.index, XM1.index
 
 
 # ============================================================
@@ -170,8 +217,52 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    # process categorical data
+    categorical_features = ['gender',
+                            'level']
+    preprocess_categorical_data = Pipeline([
+        ('imputer', SimpleImputer(strategy='most_frequent',
+                                  add_indicator = True)),
+        ('encoder', OneHotEncoder(handle_unknown = 'ignore'))
+    ])
+
+    # process numerical data
+    numerical_features = [
+        'total_events',
+        'rate_songs',
+        'rate_thumbs_up',
+        'rate_thumbs_down',
+        'rate_errors',
+        'n_sessions',
+        'has_downgraded',
+    ]
+
+    preprocess_numerical_data = Pipeline([
+        ('imputer', SimpleImputer(strategy='mean',
+                                  add_indicator=True)),
+        ('scaler', RobustScaler())
+    ])
+    # build preprocessing
+    preprocessing = ColumnTransformer([
+        ('categorical', preprocess_categorical_data, categorical_features),
+        ('numerical', preprocess_numerical_data, numerical_features)
+    ])
+
+    # build estimator
+    estimator = Pipeline([
+        ('preprocessing', preprocessing),
+        ('classifier', LogisticRegression(C=10,
+                                          solver = 'saga',
+                                          class_weight = 'balanced',
+                                          l1_ratio = 1,
+                                          max_iter = 10000
+                                          )
+                                          )
+    ])
+
+    return estimator
+
+
 
 
 # ============================================================
@@ -184,12 +275,15 @@ if __name__ == "__main__":
     train = pd.read_csv(
         "data/churn_train.csv", parse_dates=["registration_month"]
     )
+
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
 
+
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
+
     cv = RegistrationSplit()
     for i, (tr, te) in enumerate(cv.split(X, y)):
         m_tr = train.iloc[tr]["registration_month"].dt.to_period("M").unique()
@@ -209,3 +303,16 @@ if __name__ == "__main__":
     scores = pd.DataFrame(scores)
     print(f"CV results : {scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
+
+    # test set evaluation
+    test = pd.read_csv(
+        "data/churn_test.csv", parse_dates=["registration_month"]
+    )
+    model = get_estimator()
+    model.fit(X,y)
+    Xt = test.drop(columns=["churn"])
+    yt = test["churn"]
+
+    yt_score = model.predict_proba(Xt)[:,-1]
+    print(f'AUC on test data: {np.round(roc_auc_score(yt,yt_score),2)}')
+
