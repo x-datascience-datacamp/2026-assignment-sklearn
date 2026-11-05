@@ -128,8 +128,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +151,50 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        import numpy as np
+
+        if not hasattr(X, "columns") or "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "registration_month column must be of datetime dtype."
+            )
+
+        y_arr = None
+        if y is not None:
+            y_arr = np.asarray(y)
+            if len(y_arr) != len(X):
+                raise ValueError("X and y must have the same length.")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+
+        for i in range(len(unique_months) - 1):
+            m_train = unique_months[i]
+            m_test = unique_months[i + 1]
+
+            train_mask = (months == m_train).to_numpy()
+            test_mask = (months == m_test).to_numpy()
+
+            idx_train = np.flatnonzero(train_mask)
+            idx_test = np.flatnonzero(test_mask)
+
+            if y_arr is not None:
+                y_train = y_arr[idx_train]
+                y_test = y_arr[idx_test]
+
+                has_both_tr = (
+                    np.any(y_train == 0) and np.any(y_train == 1)
+                )
+                has_both_te = (
+                    np.any(y_test == 0) and np.any(y_test == 1)
+                )
+
+                if not (has_both_tr and has_both_te):
+                    continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,7 +213,54 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    from sklearn.compose import ColumnTransformer
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+    categorical_features = ["gender", "level"]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+        # "cancel_initiated",
+    ]
+
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+    numerical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", categorical_transformer, categorical_features),
+            ("num", numerical_transformer, numerical_features),
+        ],
+        remainder="drop",
+    )
+
+    classifier = RandomForestClassifier(
+        n_estimators=100,
+        random_state=42,
+    )
+
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", classifier),
+        ]
+    )
+
+    return pipeline
 
 
 # ============================================================
