@@ -91,9 +91,17 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.utils.validation import check_consistent_length, column_or_1d
 
 
 # ============================================================
@@ -119,7 +127,7 @@ class RegistrationSplit(BaseCrossValidator):
         X : array-like of shape (n_samples, n_features)
             Training data, must contain a ``registration_month`` column.
         y : array-like of shape (n_samples,), optional
-            Target values.  Used to check that both classes are present.
+            Target values. Must be provided to check both classes are present.
         groups : array-like of shape (n_samples,)
             Always ignored, exists for compatibility.
 
@@ -128,8 +136,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +158,25 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X:
+            raise ValueError("X must contain a registration month column.")
+        if not is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration month must have a datetime dtype.")
+        if y is None:
+            raise ValueError("y is required to check that both classes exist.")
+
+        y = column_or_1d(y)
+        check_consistent_length(X, y)
+        months = X["registration_month"].dt.to_period("M")
+
+        for month in sorted(months.dropna().unique()):
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+            if (
+                np.unique(y[idx_train]).size == 2
+                and np.unique(y[idx_test]).size == 2
+            ):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -162,16 +186,43 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    Encode categorical features, impute and scale numerical features, then
+    fit logistic regression. Exclude identifiers, registration dates, and
+    ``cancel_initiated``, which leaks the target from the cancellation process.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_columns = ["gender", "level"]
+    numerical_columns = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    preprocessor = ColumnTransformer([
+        (
+            "categorical",
+            OneHotEncoder(handle_unknown="ignore"),
+            categorical_columns,
+        ),
+        ("numerical", numerical_pipeline, numerical_columns),
+    ])
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
