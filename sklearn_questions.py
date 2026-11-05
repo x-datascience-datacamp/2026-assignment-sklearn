@@ -94,7 +94,13 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+import numpy as np
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 # ============================================================
 # Question 1
@@ -129,7 +135,9 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        if y is None:
+            raise ValueError("y is required to compute valid splits.")
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +160,32 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain 'registration_month'")
+
+        reg_col = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(reg_col):
+            raise ValueError("'registration_month' must be datetime dtype")
+
+        months = reg_col.dt.to_period("M")
+        unique_months = sorted(months.unique())
+        y_arr = np.asarray(y)
+
+        for i in range(len(unique_months) - 1):
+            m_train = unique_months[i]
+            m_test = unique_months[i + 1]
+
+            tr_mask = (months == m_train).to_numpy()
+            te_mask = (months == m_test).to_numpy()
+
+            y_tr = y_arr[tr_mask]
+            y_te = y_arr[te_mask]
+
+            has_both_tr = (y_tr.sum() > 0) and (len(y_tr) - y_tr.sum() > 0)
+            has_both_te = (y_te.sum() > 0) and (len(y_te) - y_te.sum() > 0)
+
+            if has_both_tr and has_both_te:
+                yield np.flatnonzero(tr_mask), np.flatnonzero(te_mask)
 
 
 # ============================================================
@@ -171,7 +204,38 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", SimpleImputer(strategy="median"), numerical_features),
+            (
+                "cat",
+                OneHotEncoder(drop="first", handle_unknown="ignore"),
+                categorical_features,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                HistGradientBoostingClassifier(random_state=42, max_iter=100),
+            ),
+        ]
+    )
 
 
 # ============================================================
