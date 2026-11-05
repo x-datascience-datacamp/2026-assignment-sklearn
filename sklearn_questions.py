@@ -91,9 +91,32 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+CATEGORICAL_COLUMNS = ["gender", "level"]
+
+# ``cancel_initiated`` is deliberately left out: in the training data it is
+# identical to ``churn`` (a user only visits the cancellation page when they
+# are already leaving), so it is not available at prediction time. It is 0
+# for every user of the held-out cohort.
+# ``user_id`` and ``registration_month`` are identifiers, not features.
+NUMERICAL_COLUMNS = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 
 # ============================================================
@@ -128,8 +151,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        # A fold is only kept if both classes are present, so the number of
+        # splits depends on the data: count what `split` actually yields.
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +175,41 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or (
+            "registration_month" not in X.columns
+        ):
+            raise ValueError(
+                "X must be a DataFrame with a 'registration_month' column."
+            )
+        if y is None:
+            raise ValueError("y is required to check that both classes are "
+                             "present in each fold.")
+
+        registration = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(registration):
+            raise ValueError(
+                "'registration_month' must be of datetime dtype, got "
+                f"{registration.dtype}."
+            )
+
+        months = registration.dt.to_period("M").to_numpy()
+        # Positional access, whatever the index of y is.
+        y = np.asarray(y)
+
+        for month in sorted(set(months)):
+            # Integer positions (not index labels, not boolean masks).
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == month + 1)
+
+            if len(idx_test) == 0:
+                continue
+            if (
+                np.unique(y[idx_train]).size < 2
+                or np.unique(y[idx_test]).size < 2
+            ):
+                continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -163,15 +220,44 @@ def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
     The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    (all columns except ``user_id``, ``registration_month``, and ``churn``),
+    minus ``cancel_initiated``: that column is a leak of the target (it equals
+    ``churn`` in the training data) and is not known for new users. The
+    ``ColumnTransformer`` only keeps the listed columns and drops the rest.
+
+    A logistic regression was selected with ``RegistrationSplit``
+    cross-validation on the training data: it scored higher and was more
+    stable across folds than gradient boosting and random forests.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    preprocessor = ColumnTransformer(
+        [
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore"),
+                CATEGORICAL_COLUMNS,
+            ),
+            (
+                "numerical",
+                # rate_errors contains NaN: impute before scaling.
+                make_pipeline(SimpleImputer(strategy="median"),
+                              StandardScaler()),
+                NUMERICAL_COLUMNS,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
