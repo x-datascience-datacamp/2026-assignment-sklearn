@@ -94,6 +94,12 @@ Hints
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 
 # ============================================================
@@ -151,8 +157,10 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        if not 'registration_month' in X.columns or not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
-            raise ValueError()
+        if 'registration_month' not in X.columns :
+            raise ValueError("No month")
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError("Must be datetime type")
 
         period_month = X['registration_month'].dt.to_period('M')
 
@@ -171,13 +179,6 @@ class RegistrationSplit(BaseCrossValidator):
 # Question 2
 # ============================================================
 
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import HistGradientBoostingClassifier
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -191,7 +192,10 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     cat_cols = ['gender', 'level']
-    num_cols = ['total_events', 'n_sessions', 'rate_songs', 'rate_thumbs_up', 'rate_thumbs_down', 'rate_errors', 'has_downgraded']
+    num_cols = ['total_events', 'n_sessions',
+                'rate_songs', 'rate_thumbs_up',
+                'rate_thumbs_down', 'rate_errors',
+                'has_downgraded']
 
     num_pipeline = Pipeline(
         steps=[
