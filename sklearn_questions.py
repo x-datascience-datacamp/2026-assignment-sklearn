@@ -91,9 +91,26 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+CATEGORICAL_COLUMNS = ["gender", "level"]
+NUMERICAL_COLUMNS = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 
 # ============================================================
@@ -128,8 +145,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +167,29 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+        months = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(months):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype."
+            )
+
+        periods = months.dt.to_period("M").to_numpy()
+        y = np.asarray(y)
+        unique_months = sorted(set(periods))
+
+        for month, next_month in zip(unique_months[:-1], unique_months[1:]):
+            if next_month != month + 1:
+                continue
+            idx_train = np.flatnonzero(periods == month)
+            idx_test = np.flatnonzero(periods == next_month)
+            if (
+                len(np.unique(y[idx_train])) < 2
+                or len(np.unique(y[idx_test])) < 2
+            ):
+                continue
+            yield idx_train.astype(np.int64), idx_test.astype(np.int64)
 
 
 # ============================================================
@@ -169,9 +206,39 @@ def get_estimator():
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
+
+    Notes
+    -----
+    ``cancel_initiated`` is deliberately left out: visiting the cancellation
+    page is part of the churn event itself, so it perfectly matches the target
+    in the training data and is not available at prediction time (it is 0 for
+    every user of the held-out cohort). ``user_id`` and
+    ``registration_month`` are identifiers / split keys, not features.
     """
-    # TODO
-    ...
+    preprocessor = ColumnTransformer(
+        [
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore"),
+                CATEGORICAL_COLUMNS,
+            ),
+            (
+                "numerical",
+                make_pipeline(
+                    SimpleImputer(strategy="median"), StandardScaler()
+                ),
+                NUMERICAL_COLUMNS,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
