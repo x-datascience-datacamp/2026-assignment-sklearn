@@ -92,9 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
 
 # ============================================================
 # Question 1
@@ -129,7 +134,9 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+
+        return sum(1 for _ in self.split(X, y))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +159,31 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be datetime")
+
+        months = X["registration_month"].dt.to_period("M")
+
+        unique_months = sorted(months.unique())
+
+        for m in unique_months:
+
+            idx_train = np.flatnonzero((months == m).to_numpy())
+
+            idx_test = np.flatnonzero((months == m + 1).to_numpy())
+
+            if len(idx_test) == 0:
+                continue
+
+            train_classes = np.unique(y.iloc[idx_train])
+
+            test_classes = np.unique(y.iloc[idx_test])
+
+            if len(train_classes) != 2 or len(test_classes) != 2:
+                continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,8 +202,45 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
 
+    categorical_transformer = OneHotEncoder(
+        handle_unknown="ignore"
+    )
+
+    numerical_transformer = SimpleImputer(
+        strategy="median"
+    )
+
+    categorical_features = [
+        "gender",
+        "level"
+    ]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded"
+    ]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", categorical_transformer, categorical_features),
+            ("num", numerical_transformer, numerical_features)
+        ]
+    )
+
+    model = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(
+            random_state=42
+        ))
+    ])
+
+    return model
 
 # ============================================================
 # Script to test the objects implemented in this file.
