@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -129,7 +135,8 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -153,6 +160,20 @@ class RegistrationSplit(BaseCrossValidator):
         """
         # Split into monthly registration folds - TODO
         ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "X must contain a 'registration_month' column of datetime dtype"
+            )
+        months = X["registration_month"].dt.to_period("M").to_numpy()
+        y=pd.Series(y).to_numpy()
+        for month in sorted(np.unique(months)):
+            idx_train = np.where(months == month)[0]
+            idx_test = np.where(months == month + 1)[0]
+            if len(set(y[idx_train])) == 2 and len(set(y[idx_test])) == 2:
+                yield idx_train, idx_test
+
+
+
 
 
 # ============================================================
@@ -171,7 +192,28 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical_columns = ["gender", "level"]
+    numerical_columns = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    preprocessor = ColumnTransformer([
+        ("categorical", OneHotEncoder(handle_unknown="ignore"),
+         categorical_columns),
+        ("numerical", make_pipeline(SimpleImputer(), StandardScaler()),
+         numerical_columns),
+    ])
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
+
+
 
 
 # ============================================================
