@@ -91,9 +91,26 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+CATEGORICAL_COLUMNS = ["gender", "level"]
+NUMERICAL_COLUMNS = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 
 
 # ============================================================
@@ -110,6 +127,52 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _get_folds(self, X, y):
+        """Compute the list of valid (train, test) index pairs.
+
+        Parameters
+        ----------
+        X : DataFrame of shape (n_samples, n_features)
+            Data, must contain a ``registration_month`` column of datetime
+            dtype.
+        y : array-like of shape (n_samples,)
+            Target values.
+
+        Returns
+        -------
+        folds : list of tuple of ndarray
+            The valid ``(idx_train, idx_test)`` pairs, in temporal order.
+        """
+        if "registration_month" not in X.columns:
+            raise ValueError(
+                "X must contain a 'registration_month' column."
+            )
+        dates = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError(
+                "'registration_month' must be of datetime dtype, got "
+                f"{dates.dtype}."
+            )
+        months = dates.dt.to_period("M").to_numpy()
+        y = np.asarray(y)
+        unique_months = sorted(pd.unique(months[~pd.isna(months)]))
+
+        folds = []
+        for month_train, month_test in zip(
+            unique_months[:-1], unique_months[1:]
+        ):
+            if month_test != month_train + 1:
+                continue
+            idx_train = np.flatnonzero(months == month_train)
+            idx_test = np.flatnonzero(months == month_test)
+            if (
+                len(np.unique(y[idx_train])) < 2
+                or len(np.unique(y[idx_test])) < 2
+            ):
+                continue
+            folds.append((idx_train, idx_test))
+        return folds
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +191,11 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        if y is None:
+            raise ValueError(
+                "y is required to count the folds containing both classes."
+            )
+        return len(self._get_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +217,8 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        for idx_train, idx_test in self._get_folds(X, y):
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -169,9 +235,49 @@ def get_estimator():
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
+
+    Notes
+    -----
+    ``cancel_initiated`` is deliberately dropped: visiting the cancellation
+    page is part of the churn process itself, so it leaks the target and is
+    not available for users we want to predict on in advance.
+    ``user_id`` and ``registration_month`` are identifiers / split keys and
+    are dropped as well.
     """
-    # TODO
-    ...
+    preprocessor = ColumnTransformer(
+        [
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore"),
+                CATEGORICAL_COLUMNS,
+            ),
+            (
+                "num",
+                Pipeline(
+                    [
+                        (
+                            "imputer",
+                            SimpleImputer(
+                                strategy="median", add_indicator=True
+                            ),
+                        ),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                NUMERICAL_COLUMNS,
+            ),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                LogisticRegression(max_iter=1000),
+            ),
+        ]
+    )
 
 
 # ============================================================
