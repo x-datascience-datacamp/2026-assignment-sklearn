@@ -91,14 +91,23 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 
 # ============================================================
 # Question 1
 # ============================================================
+
 
 class RegistrationSplit(BaseCrossValidator):
     """Cross-validator that splits users by registration month.
@@ -128,8 +137,8 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        # Return the number of valid splits -
+        return len(list(self.split(X, y, groups)))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,13 +160,31 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype.")
+
+        # Split into monthly registration folds -
+        periods = X["registration_month"].dt.to_period("M")
+        unique_periods = sorted(periods.unique())
+        y_arr = np.asarray(y)
+
+        for i in range(len(unique_periods) - 1):
+            train_idx = np.where(periods == unique_periods[i])[0]
+            test_idx = np.where(periods == unique_periods[i + 1])[0]
+
+            # check that both the training set and the test set contain at least one
+            # churner and one non-churner
+            if (
+                len(np.unique(y_arr[train_idx])) > 1
+                and len(np.unique(y_arr[test_idx])) > 1
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,8 +197,48 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    categorical_features = ["gender", "level"]
+
+    numeric_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+        ]
+    )
+
+    categorical_transformer = Pipeline(
+        steps=[
+            (
+                "encoder",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+            ),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ]
+    )
+
+    # Use a HistGradientBoostingClassifier for better performance (ROC-AUC >= 0.72)
+    classifier = HistGradientBoostingClassifier(random_state=42)
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", classifier),
+        ]
+    )
 
 
 # ============================================================
@@ -181,9 +248,7 @@ def get_estimator():
 if __name__ == "__main__":
     from sklearn.model_selection import cross_validate
 
-    train = pd.read_csv(
-        "data/churn_train.csv", parse_dates=["registration_month"]
-    )
+    train = pd.read_csv("data/churn_train.csv", parse_dates=["registration_month"])
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
