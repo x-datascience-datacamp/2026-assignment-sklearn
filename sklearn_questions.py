@@ -94,8 +94,11 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
-
-
+from sklearn.pipeline import make_pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
 # ============================================================
 # Question 1
 # ============================================================
@@ -128,8 +131,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +153,31 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("The 'registration_month' " \
+                                "column must be of datetime dtype.")
+
+        periods = X["registration_month"].dt.to_period("M")
+        unique_periods = sorted(periods.unique())
+
+        periods_arr = periods.to_numpy()
+        y_arr = pd.Series(y).to_numpy()
+
+        for period in unique_periods:
+            idx_train = (periods_arr == period).nonzero()[0]
+            idx_test = (periods_arr == (period + 1)).nonzero()[0]
+
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+
+            y_train = y_arr[idx_train]
+            y_test = y_arr[idx_test]
+
+            if len(set(y_train)) > 1 and len(set(y_test)) > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +195,34 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = [
+        "total_events", "rate_songs", "rate_thumbs_up",
+        "rate_thumbs_down", "rate_errors", "n_sessions",
+        "has_downgraded"
+    ]
+    categorical_features = ["gender", "level"]
+
+    numeric_transformer = make_pipeline(
+        SimpleImputer(strategy="mean"),
+        StandardScaler()
+    )
+
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ],
+        remainder="drop"
+    )
+
+    estimator = make_pipeline(
+        preprocessor,
+        RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
+    )
+
+    return estimator
 
 
 # ============================================================
