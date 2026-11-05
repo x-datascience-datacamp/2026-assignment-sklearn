@@ -92,8 +92,12 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +132,16 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        self._validate_registration_month(X)
+        periods = X["registration_month"].dt.to_period("M")
+
+        if y is None:
+            return sum(
+                period + 1 in periods.unique()
+                for period in periods.unique()
+            )
+
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +163,38 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        self._validate_registration_month(X)
+
+        if y is None:
+            raise ValueError("y must be provided to validate churn classes.")
+
+        periods = X["registration_month"].dt.to_period("M")
+        unique_periods = periods.unique()
+        y_values = pd.Series(y).reset_index(drop=True)
+
+        for period in sorted(unique_periods):
+            train_period = periods == period
+            test_period = periods == period + 1
+            train_indices = train_period.to_numpy().nonzero()[0]
+            test_indices = test_period.to_numpy().nonzero()[0]
+
+            if (
+                len(train_indices) > 0
+                and len(test_indices) > 0
+                and y_values.iloc[train_indices].nunique() == 2
+                and y_values.iloc[test_indices].nunique() == 2
+            ):
+                yield train_indices, test_indices
+
+    @staticmethod
+    def _validate_registration_month(X):
+        """Raise ``ValueError`` unless registration dates are datetime-like."""
+        if "registration_month" not in X:
+            raise ValueError("X must contain a registration_month column.")
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must have datetime dtype.")
 
 
 # ============================================================
@@ -170,8 +212,42 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+    numerical_pipeline = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("categorical", categorical_pipeline, categorical_features),
+            ("numerical", numerical_pipeline, numerical_features),
+        ]
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=2000)),
+        ]
+    )
 
 
 # ============================================================
