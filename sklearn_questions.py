@@ -92,9 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import make_pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 # ============================================================
 # Question 1
@@ -128,8 +132,28 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be a datetime")
+
+        labels = y if y is not None else X["churn"]
+        labels = pd.Series(np.asarray(labels), index=X.index)
+
+        months = sorted(X["registration_month"].unique())
+
+        n_splits = 0
+        for month in months:
+            next_month = month + pd.DateOffset(months=1)
+            if next_month not in months:
+                continue
+
+            train_labels = labels[X["registration_month"] == month]
+            test_labels = labels[X["registration_month"] == next_month]
+
+            if train_labels.nunique() == 2 and test_labels.nunique() == 2:
+                n_splits += 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +175,31 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be a datetime")
+
+        labels = pd.Series(np.asarray(y), index=X.index)
+        months = sorted(X["registration_month"].unique())
+
+        for month in months:
+                next_month = month + pd.DateOffset(months=1)
+                if next_month not in months:
+                    continue
+                train_mask = X["registration_month"] == month
+                test_mask = X["registration_month"] == next_month
+                if labels[train_mask].nunique() == 2 and labels[
+                    test_mask].nunique() == 2:
+
+                    idx_train = np.where(train_mask)[0]
+                    idx_test = np.where(test_mask)[0]
+                    yield idx_train, idx_test
+
+
+
+
+
+
+
 
 
 # ============================================================
@@ -170,9 +217,27 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+        #"cancel_initiated", #remove as simplifies learning
+    ]
+    cat_cols = ["gender", "level"]
 
+
+    pre_processor = ColumnTransformer(
+         [
+              ("numerical", make_pipeline(SimpleImputer(strategy="median"),
+                                          StandardScaler()), num_cols),
+              ("categorical", OneHotEncoder(),cat_cols)
+         ]
+    )
+    return make_pipeline(pre_processor, LogisticRegression())
 
 # ============================================================
 # Script to test the objects implemented in this file.
@@ -191,6 +256,7 @@ if __name__ == "__main__":
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
+
     for i, (tr, te) in enumerate(cv.split(X, y)):
         m_tr = train.iloc[tr]["registration_month"].dt.to_period("M").unique()
         m_te = train.iloc[te]["registration_month"].dt.to_period("M").unique()
