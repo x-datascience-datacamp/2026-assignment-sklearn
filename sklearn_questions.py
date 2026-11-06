@@ -91,9 +91,14 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
-
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +133,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,13 +155,57 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a registration_month column")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype")
+
+        periods = X["registration_month"].dt.to_period("M")
+        sorted_periods = sorted(periods.unique())
+
+        y_arr = None
+        if y is not None:
+            y_arr = pd.Series(y) if not isinstance(y, pd.Series) else y
+
+        for i in range(len(sorted_periods) - 1):
+            train_month = sorted_periods[i]
+            test_month = sorted_periods[i + 1]
+
+            train_mask = (periods == train_month).values
+            test_mask = (periods == test_month).values
+
+            train_idx = np.flatnonzero(train_mask)
+            test_idx = np.flatnonzero(test_mask)
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            if y_arr is not None:
+                train_y = (
+                    y_arr.iloc[train_idx]
+                    if hasattr(y_arr, "iloc")
+                    else y_arr[train_idx]
+                )
+                test_y = (
+                    y_arr.iloc[test_idx]
+                    if hasattr(y_arr, "iloc")
+                    else y_arr[test_idx]
+                )
+
+                has_train_classes = len(set(train_y)) >= 2
+                has_test_classes = len(set(test_y)) >= 2
+                if not (has_train_classes and has_test_classes):
+                    continue
+
+            yield train_idx, test_idx
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,8 +218,45 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    categorical_features = ["gender", "level"]
+
+    numeric_transformer = make_pipeline(
+        SimpleImputer(strategy="mean"),
+        StandardScaler()
+    )
+
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
+        ],
+        remainder="drop"
+    )
+
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(
+                            solver='saga',
+                            C=10,
+                            l1_ratio=0.5,
+                            max_iter=5000,
+                            random_state=42
+                            )),
+        ]
+    )
+    return pipeline
 
 
 # ============================================================
