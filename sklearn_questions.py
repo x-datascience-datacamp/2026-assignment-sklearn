@@ -92,9 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 # ============================================================
 # Question 1
@@ -128,7 +133,10 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
+        n_splits = sum(1 for _ in self.split(X,y))
+        return n_splits
+
+
         ...
 
     def split(self, X, y, groups=None):
@@ -151,8 +159,27 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if y is None :
+            raise ValueError
+
+        if "registration_month" not in X.columns:
+            raise ValueError
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError ("'registration_month' doit être un dtype datetime" )
+
+        mois_ins = X["registration_month"].dt.to_period("M")
+        y = np.asarray(y)
+        for mois in sorted(mois_ins.dropna().unique()):
+            idx_train = np.flatnonzero((mois_ins == mois).to_numpy())
+            idx_test = np.flatnonzero((mois_ins == mois + 1).to_numpy())
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +197,49 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore"),
+                categorical,
+            ),
+            (
+                "num",
+                SimpleImputer(strategy="median"),
+                numerical,
+            ),
+        ],
+        remainder="drop",
+    )
+
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        (
+            "classifier",
+            RandomForestClassifier(
+                n_estimators=200,
+                min_samples_leaf=5,
+                random_state=0,
+                n_jobs=-1,
+            ),
+        ),
+    ])
+
+
+
 
 
 # ============================================================
