@@ -93,7 +93,12 @@ Hints
 """
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 
 # ============================================================
@@ -128,8 +133,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +155,30 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be datetime dtype.")
+        if y is None:
+            raise ValueError("y must be provided to check class coverage.")
+
+        month_periods = X["registration_month"].dt.to_period("M").to_numpy()
+        y_values = pd.Series(y).to_numpy()
+        if len(y_values) != len(month_periods):
+            raise ValueError("X and y must contain the same number of samples.")
+
+        unique_months = sorted(set(month_periods))
+        for train_month, test_month in zip(unique_months[:-1], unique_months[1:]):
+            if test_month != train_month + 1:
+                continue
+
+            train_idx = (month_periods == train_month).nonzero()[0]
+            test_idx = (month_periods == test_month).nonzero()[0]
+            if (
+                len(pd.unique(y_values[train_idx])) == 2
+                and len(pd.unique(y_values[test_idx])) == 2
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -170,8 +196,39 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    categorical_features = ["gender", "level"]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "numeric",
+                SimpleImputer(strategy="median"),
+                numeric_features,
+            ),
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore"),
+                categorical_features,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(C=10, max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
