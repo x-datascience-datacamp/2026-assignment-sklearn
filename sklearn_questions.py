@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -110,6 +116,46 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _valid_folds(self, X, y):
+        """Return the list of valid (idx_train, idx_test) folds.
+
+        Parameters
+        ----------
+        X : DataFrame of shape (n_samples, n_features)
+            Training data, must contain a ``registration_month`` column.
+        y : array-like of shape (n_samples,)
+            Target values.
+
+        Returns
+        -------
+        folds : list of tuple of ndarray
+            The (train indices, test indices) of each valid fold.
+        """
+        reg_month = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(reg_month):
+            raise ValueError(
+                "The column 'registration_month' must be of datetime dtype."
+            )
+
+        # Positions 0..n-1 of the rows (not the DataFrame index labels)
+        months = reg_month.dt.to_period("M").to_numpy()
+        y = np.asarray(y)
+
+        folds = []
+        for month in sorted(set(months)):
+            next_month = month + 1
+            idx_train = np.where(months == month)[0]
+            idx_test = np.where(months == next_month)[0]
+            if len(idx_test) == 0:
+                continue
+            # Keep the fold only if both sets contain the two classes
+            if len(np.unique(y[idx_train])) < 2:
+                continue
+            if len(np.unique(y[idx_test])) < 2:
+                continue
+            folds.append((idx_train, idx_test))
+        return folds
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +174,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return len(self._valid_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +196,8 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        for idx_train, idx_test in self._valid_folds(X, y):
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +215,38 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender", "level"]
+    # cancel_initiated is NOT used: in the training data it is equal to
+    # churn (data leakage), but for new users it is always 0.
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
+            (
+                "num",
+                make_pipeline(SimpleImputer(strategy="median"),
+                              StandardScaler()),
+                numerical_cols,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
