@@ -91,9 +91,16 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.utils.validation import check_consistent_length, column_or_1d
 
 
 # ============================================================
@@ -119,7 +126,7 @@ class RegistrationSplit(BaseCrossValidator):
         X : array-like of shape (n_samples, n_features)
             Training data, must contain a ``registration_month`` column.
         y : array-like of shape (n_samples,), optional
-            Target values.  Used to check that both classes are present.
+            Target values. Required to check that both classes are present.
         groups : array-like of shape (n_samples,)
             Always ignored, exists for compatibility.
 
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -150,9 +156,38 @@ class RegistrationSplit(BaseCrossValidator):
             The training set indices for that split.
         idx_test : ndarray
             The testing set indices for that split.
+
+        Raises
+        ------
+        ValueError
+            If the registration column is missing or not datetime, or if
+            targets are missing or incompatible with X.
+
+        Notes
+        -----
+        Indices are positional, regardless of the DataFrame index. Users
+        with missing registration dates are excluded from all folds.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X:
+            raise ValueError("X must contain a registration_month column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must have datetime dtype.")
+        if y is None:
+            raise ValueError("y is required to check both churn classes.")
+
+        y = column_or_1d(y)
+        check_consistent_length(X, y)
+        months = X["registration_month"].dt.to_period("M")
+
+        for month in sorted(months.dropna().unique()):
+            train_idx = np.flatnonzero((months == month).to_numpy())
+            test_idx = np.flatnonzero((months == month + 1).to_numpy())
+            # Compare calendar months, so gaps never create a fold.
+            if all(
+                np.any(y[indices] == 0) and np.any(y[indices] == 1)
+                for indices in (train_idx, test_idx)
+            ):
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -162,16 +197,46 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    Categorical features are one-hot encoded; numerical features are median
+    imputed and standardized before fitting logistic regression. All learned
+    preprocessing is fitted within the pipeline to avoid validation leakage.
+
+    Only behavioral features, gender, and subscription level are selected.
+    ``cancel_initiated`` is excluded because it reveals cancellation intent
+    that is unavailable for the users whose future churn we want to predict.
+    Identifiers, registration dates, and the target are also excluded.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    preprocessing = ColumnTransformer([
+        (
+            "categorical",
+            OneHotEncoder(handle_unknown="ignore"),
+            categorical_features,
+        ),
+        ("numerical", numerical_pipeline, numerical_features),
+    ], remainder="drop")
+    return Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
