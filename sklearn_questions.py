@@ -93,9 +93,13 @@ Hints
 """
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
-
-
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+import numpy as np
 # ============================================================
 # Question 1
 # ============================================================
@@ -128,6 +132,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
+        return sum(1 for _ in self.split(X, y, groups=groups))
         # Return the number of valid splits - TODO
         ...
 
@@ -152,13 +157,47 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
+        col = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(col):
+            raise ValueError("'registration_month' must be of datetime dtype, ")
+        periods= col.dt.to_period("M")
+        y_arr = np.asarray(y)
+
+        unique_periods = sorted(periods.dropna().unique())
+
+        for m_curr, m_next in zip(unique_periods[:-1], unique_periods[1:]):
+            if m_next != m_curr + 1:
+                continue
+
+            idx_train = np.flatnonzero((periods == m_curr).to_numpy())
+            idx_test = np.flatnonzero((periods == m_next).to_numpy())
+
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+
+            # Require both classes in both the train and the test sets.
+            has_both_train = len(set(y_arr[idx_train])) >= 2
+            has_both_test = len(set(y_arr[idx_test])) >= 2
+
+            if has_both_train and has_both_test:
+                yield idx_train, idx_test
         ...
 
 
 # ============================================================
 # Question 2
 # ============================================================
+CATEGORICAL_FEATURES = ["gender", "level"]
 
+NUMERICAL_FEATURES = [
+    "total_events",
+    "rate_songs",
+    "rate_thumbs_up",
+    "rate_thumbs_down",
+    "rate_errors",
+    "n_sessions",
+    "has_downgraded",
+]
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
@@ -170,7 +209,29 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
+    categorical_pipe = OneHotEncoder(handle_unknown="ignore")
+    numerical_pipe = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", categorical_pipe, CATEGORICAL_FEATURES),
+            ("num", numerical_pipe, NUMERICAL_FEATURES),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                LogisticRegression(max_iter=1000, class_weight="balanced"),
+            ),
+        ]
+    )
     ...
 
 
