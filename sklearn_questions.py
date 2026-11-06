@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        # Count the folds actually produced by `split`, so that both methods
+        # always agree.
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +158,28 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        registration = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(registration):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype, "
+                f"got {registration.dtype} instead."
+            )
+
+        # Work with positions (0, 1, 2, ...) and not with pandas labels.
+        months = registration.dt.to_period("M").to_numpy()
+        y = np.asarray(y)
+
+        for month in sorted(np.unique(months)):
+            next_month = month + 1
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == next_month)
+
+            # Keep the fold only if both sets contain the two classes.
+            if (
+                len(np.unique(y[idx_train])) == 2
+                and len(np.unique(y[idx_test])) == 2
+            ):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +197,42 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender", "level"]
+
+    # `cancel_initiated` is deliberately NOT used: a user visits the
+    # cancellation page only when already churning, so this information is
+    # not available when we want to predict churn (data leakage).
+    # `user_id` and `registration_month` are identifiers, not features.
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numerical_pipeline = Pipeline([
+        # `rate_errors` contains missing values.
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    # Columns not listed here are dropped (remainder="drop").
+    preprocessor = ColumnTransformer(
+        [
+            ("categorical", OneHotEncoder(handle_unknown="ignore"),
+             categorical_cols),
+            ("numerical", numerical_pipeline, numerical_cols),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
