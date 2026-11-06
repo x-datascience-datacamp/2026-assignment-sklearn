@@ -93,7 +93,12 @@ Hints
 """
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -129,7 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +157,23 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be of datetime dtype.")
+        months = X["registration_month"].dt.to_period("M").reset_index(
+            drop=True
+        )
+        y = pd.Series(y).reset_index(drop=True)
+
+        for month in sorted(months.unique()):
+            idx_train = months.index[months == month].to_numpy()
+            idx_test = months.index[months == month + 1].to_numpy()
+            if len(idx_test) == 0:
+                continue
+            if y.iloc[idx_train].nunique() < 2:
+                continue
+            if y.iloc[idx_test].nunique() < 2:
+                continue
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,8 +192,37 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
 
+    num_pipe = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+            ("num", num_pipe, numerical),
+        ]
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 # ============================================================
 # Script to test the objects implemented in this file.
