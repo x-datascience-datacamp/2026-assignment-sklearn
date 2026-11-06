@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,35 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month' column.")
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be datetime dtype.")
+
+        y = pd.Series(y, index=X.index)
+        month_periods = X["registration_month"].dt.to_period("M")
+        months = sorted(month_periods.unique())
+
+        for month_index in range(len(months) - 1):
+            train_mask = month_periods == months[month_index]
+            test_mask = month_periods == months[month_index + 1]
+
+            if not train_mask.any() or not test_mask.any():
+                continue
+
+            y_train = y[train_mask]
+            y_test = y[test_mask]
+
+            if y_train.nunique() < 2 or y_test.nunique() < 2:
+                continue
+
+            yield np.flatnonzero(train_mask.to_numpy()), np.flatnonzero(
+                test_mask.to_numpy()
+            )
 
 
 # ============================================================
@@ -170,8 +202,38 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numeric_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+    categorical_features = ["gender", "level"]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "numeric",
+                Pipeline([("imputer", SimpleImputer(strategy="median"))]),
+                numeric_features,
+            ),
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore"),
+                categorical_features,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    classifier = RandomForestClassifier(n_estimators=500, random_state=0)
+
+    return Pipeline(
+        steps=[("preprocessor", preprocessor), ("classifier", classifier)]
+    )
 
 
 # ============================================================
