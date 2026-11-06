@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -110,6 +116,33 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _get_folds(self, X, y=None):
+        """Return the list of valid (idx_train, idx_test) pairs."""
+        months = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(months):
+            raise ValueError("registration_month must be of datetime dtype.")
+
+        periods = months.dt.to_period("M")
+        if y is not None:
+            y = np.asarray(y)
+
+        folds = []
+        for month in sorted(periods.dropna().unique()):
+            idx_train = np.where(np.asarray(periods == month))[0]
+            idx_test = np.where(np.asarray(periods == month + 1))[0]
+
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+            if y is not None:
+                if len(np.unique(y[idx_train])) < 2:
+                    continue
+                if len(np.unique(y[idx_test])) < 2:
+                    continue
+
+            folds.append((idx_train, idx_test))
+
+        return folds
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +161,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return len(self._get_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +183,8 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        for idx_train, idx_test in self._get_folds(X, y):
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +202,40 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender", "level"]
+    # cancel_initiated is left out: it is not known before the user churns
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = OneHotEncoder(handle_unknown="ignore")
+    numerical_transformer = Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", categorical_transformer, categorical_cols),
+            ("num", numerical_transformer, numerical_cols),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
@@ -184,11 +248,9 @@ if __name__ == "__main__":
     train = pd.read_csv(
         "data/churn_train.csv", parse_dates=["registration_month"]
     )
-    # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
 
-    # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
     for i, (tr, te) in enumerate(cv.split(X, y)):
@@ -203,7 +265,6 @@ if __name__ == "__main__":
             f"(n={len(te)}, churn={churn_te:.1%})"
         )
 
-    # ---- cross-validate the estimator ----
     print("\n=== Cross-validation with RegistrationSplit ===")
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
