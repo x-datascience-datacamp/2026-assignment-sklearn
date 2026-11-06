@@ -93,7 +93,12 @@ Hints
 """
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +133,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return len(list(self.split(X, y, groups)))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,13 +155,30 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        registration = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(registration):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype, "
+                f"got {registration.dtype}."
+            )
+
+        months = registration.dt.to_period("M").to_numpy()
+        y = pd.Series(y).to_numpy()
+
+        for month in sorted(set(months)):
+            idx_train = (months == month).nonzero()[0]
+            idx_test = (months == month + 1).nonzero()[0]
+
+            has_both_classes_train = len(set(y[idx_train])) == 2
+            has_both_classes_test = len(set(y[idx_test])) == 2
+            if has_both_classes_train and has_both_classes_test:
+                yield idx_train, idx_test
 
 
 # ============================================================
 # Question 2
 # ============================================================
+
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
@@ -170,9 +191,34 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
 
+    num_cols = ['rate_songs', 'total_events', 'rate_thumbs_up',
+                'rate_thumbs_down', 'rate_errors', 'n_sessions']
+    cat_cols = ['gender', 'level', 'has_downgraded']
+
+    pipe_cat = Pipeline([
+        ('OneHotEncoder', OneHotEncoder())
+    ])
+
+    pipe_nums = Pipeline([
+        ('SimpleImputer', SimpleImputer()),
+        ('scaling', StandardScaler())
+    ])
+
+    processor = ColumnTransformer(
+        transformers=[
+            ('numeric', pipe_nums, num_cols),
+            ('categorial', pipe_cat, cat_cols)
+        ],
+        remainder='drop'
+    )
+
+    pipe = Pipeline([
+        ('transformer', processor),
+        ('classifier', LogisticRegression(random_state=42))
+    ])
+
+    return pipe
 
 # ============================================================
 # Script to test the objects implemented in this file.
