@@ -92,8 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import make_column_transformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +133,8 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,27 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        months = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(months):
+            raise ValueError("registration_month must be of datetime dtype.")
+
+        periods = months.dt.to_period("M")
+        y = np.asarray(y)
+        unique_months = sorted(periods.unique())
+
+        for month in unique_months:
+            next_month = month + 1
+            if next_month not in unique_months:
+                continue
+
+            idx_train = np.flatnonzero(periods == month)
+            idx_test = np.flatnonzero(periods == next_month)
+
+            if (
+                len(np.unique(y[idx_train])) == 2
+                and len(np.unique(y[idx_test])) == 2
+            ):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +194,26 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender", "level"]
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = make_column_transformer(
+        (OneHotEncoder(handle_unknown="ignore"), categorical_cols),
+        (
+            make_pipeline(SimpleImputer(strategy="median"), StandardScaler()),
+            numerical_cols,
+        ),
+    )
+
+    return make_pipeline(preprocessor, LogisticRegression(max_iter=1000))
 
 
 # ============================================================
