@@ -92,9 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
 
 # ============================================================
 # Question 1
@@ -129,7 +133,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +156,32 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "La colonne 'registration_month' doit être de type datetime."
+            )
+
+        # Conversion en périodes mensuelles
+        periods = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(periods.unique())
+        y_array = np.asarray(y)
+
+        for m_train in unique_months:
+            m_test = m_train + 1  # Le mois suivant (M+1)
+
+            idx_train = np.where(periods == m_train)[0]
+            idx_test = np.where(periods == m_test)[0]
+
+            if len(idx_test) == 0:
+                continue  # Passe s'il n'y a pas d'utilisateurs le mois suivant
+
+            y_train = y_array[idx_train]
+            y_test = y_array[idx_test]
+
+            # Vérification : au moins 2 classes différentes (0 et 1)
+            # dans le train ET le test
+            if len(np.unique(y_train)) > 1 and len(np.unique(y_test)) > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -171,7 +200,29 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    # Définition des features utiles (sans cancel_initiated, user_id,
+    # ni registration_month)
+    num_features = [
+        "total_events", "rate_songs", "rate_thumbs_up",
+        "rate_thumbs_down", "rate_errors", "n_sessions", "has_downgraded"
+    ]
+    cat_features = ["gender", "level"]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", SimpleImputer(strategy="mean"), num_features),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_features)
+        ],
+        # Ignore automatiquement les colonnes non listées ci-dessus
+        remainder="drop"
+    )
+
+    pipeline = Pipeline(steps=[
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(random_state=42))
+    ])
+
+    return pipeline
 
 
 # ============================================================
