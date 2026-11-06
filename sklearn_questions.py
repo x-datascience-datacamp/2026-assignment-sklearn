@@ -92,7 +92,12 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import BaseCrossValidator
 
 
@@ -128,8 +133,37 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        user_months = X["registration_month"].dt.to_period("M")
+        months = sorted(user_months.dropna().unique())
+
+        n_splits = 0
+
+        for month_train, month_test in zip(months[:-1], months[1:]):
+
+            # Check that the months are consecutive.
+            if month_test != month_train + 1:
+                continue
+
+            train_idx = np.flatnonzero(
+                (user_months == month_train).to_numpy()
+            )
+
+            test_idx = np.flatnonzero(
+                (user_months == month_test).to_numpy()
+            )
+
+            # Both classes must be present in the training set.
+            if np.unique(y[train_idx]).size != 2:
+                continue
+
+            # Both classes must be present in the test set.
+            if np.unique(y[test_idx]).size != 2:
+                continue
+
+            n_splits += 1
+
+        return n_splits
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +185,40 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError(
+                "registration_month must have datetime dtype."
+            )
+
+        user_months = X["registration_month"].dt.to_period("M")
+        months = sorted(user_months.dropna().unique())
+
+        for month_train, month_test in zip(months[:-1], months[1:]):
+
+            # Check that the months are consecutive.
+            if month_test != month_train + 1:
+                continue
+
+            train_idx = np.flatnonzero(
+                (user_months == month_train).to_numpy()
+            )
+
+            test_idx = np.flatnonzero(
+                (user_months == month_test).to_numpy()
+            )
+
+            # Check that both classes are present in both sets.
+            if np.unique(y[train_idx]).size != 2:
+                continue
+
+            if np.unique(y[test_idx]).size != 2:
+                continue
+
+            yield train_idx, test_idx
+
 
 
 # ============================================================
@@ -170,13 +236,82 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = [
+        "gender",
+        "level",
+    ]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_pipeline = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="most_frequent"),
+            ),
+            (
+                "encoder",
+                OneHotEncoder(handle_unknown="ignore"),
+            ),
+        ]
+    )
+
+    numerical_pipeline = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="median"),
+            ),
+            (
+                "scaler",
+                StandardScaler(),
+            ),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorical",
+                categorical_pipeline,
+                categorical_features,
+            ),
+            (
+                "numerical",
+                numerical_pipeline,
+                numerical_features,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    classifier = LogisticRegression(
+        class_weight="balanced"
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", classifier),
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
 # Script to test the objects implemented in this file.
 # ============================================================
+
+
 
 if __name__ == "__main__":
     from sklearn.model_selection import cross_validate
@@ -191,6 +326,7 @@ if __name__ == "__main__":
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
     cv = RegistrationSplit()
+    cv.get_n_splits(X)
     for i, (tr, te) in enumerate(cv.split(X, y)):
         m_tr = train.iloc[tr]["registration_month"].dt.to_period("M").unique()
         m_te = train.iloc[te]["registration_month"].dt.to_period("M").unique()
