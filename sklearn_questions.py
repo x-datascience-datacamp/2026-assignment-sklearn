@@ -92,7 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
+from pandas.api.types import is_datetime64_any_dtype
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import BaseCrossValidator
 
 
@@ -129,7 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +158,28 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("registration_month must be a datetime")
+
+        months = X["registration_month"].dt.to_period("M")
+        y_array = np.array(y)
+
+        unique_months = sorted(np.unique(months))
+
+        for month_train in unique_months:
+            month_test = month_train + 1
+
+            idx_train  =   np.where(months  ==  month_train)[0]
+            idx_test = np.where(months  ==  month_test)[0]
+
+            if len(idx_test) == 0:
+                continue
+
+            y_train = y_array[idx_train]
+            y_test =  y_array[idx_test]
+
+            if len(np.unique(y_train)) > 1 and len(np.unique(y_test)) > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -161,17 +188,50 @@ class RegistrationSplit(BaseCrossValidator):
 
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
-
     The pipeline is trained on the feature columns of ``churn_train.csv``
     (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    ``cancel_initiated`` is deliberately left out: visiting the cancellation
+    page happens right before churning, so it would not be available (or would
+    leak the target) at prediction time. Columns not listed below are dropped
+    by the ``ColumnTransformer`` (``remainder="drop"``).
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    texts_cols = ["gender", "level"]
+    stats_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    texts_pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+    stats_pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("txt", texts_pipe, texts_cols),
+            ("stat", stats_pipe, stats_cols),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", LogisticRegression(random_state=0)),
+    ])
 
 
 # ============================================================
