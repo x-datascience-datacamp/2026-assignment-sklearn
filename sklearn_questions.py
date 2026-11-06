@@ -91,7 +91,14 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
+
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from sklearn.model_selection import BaseCrossValidator
 
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +157,20 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must have datetime dtype")
+        if y is None:
+            raise ValueError("y is required to check both target classes")
+        months = X["registration_month"].dt.to_period("M")
+        target = np.asarray(y)
+        for month in sorted(months.dropna().unique()):
+            train = np.flatnonzero(months == month)
+            test = np.flatnonzero(months == month + 1)
+            if (np.unique(target[train]).size == 2
+                    and np.unique(target[test]).size == 2):
+                yield train, test
 
 
 # ============================================================
@@ -170,8 +188,23 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numerical = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded",
+    ]
+    preprocess = ColumnTransformer([
+        ("categorical", OneHotEncoder(handle_unknown="ignore"),
+         ["gender", "level"]),
+        ("numerical", Pipeline([
+            ("impute", SimpleImputer(strategy="median")),
+            ("scale", StandardScaler()),
+        ]), numerical),
+    ])
+    # Cancellation-page visits reveal the outcome rather than predict it.
+    return Pipeline([
+        ("preprocess", preprocess),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
