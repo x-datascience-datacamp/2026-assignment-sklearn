@@ -91,9 +91,16 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.utils.validation import check_consistent_length
 
 
 # ============================================================
@@ -128,8 +135,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +157,30 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X:
+            raise ValueError("X must contain registration_month as datetime.")
+        registration = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(registration):
+            raise ValueError("registration_month must have a datetime dtype.")
+        if registration.isna().any():
+            raise ValueError("registration_month must not contain missing dates.")
+        if y is None:
+            raise ValueError("y is required to check both churn classes.")
+        target = np.asarray(y)
+        if target.ndim != 1:
+            raise ValueError("y must be one-dimensional.")
+        check_consistent_length(X, target)
+
+        months = registration.dt.to_period("M")
+        for month in sorted(months.unique()):
+            # Use consecutive calendar months, even if a cohort is absent.
+            train = np.flatnonzero(months == month)
+            test = np.flatnonzero(months == month + 1)
+            if all(
+                np.any(target[idx] == 0) and np.any(target[idx] == 1)
+                for idx in (train, test)
+            ):
+                yield train, test
 
 
 # ============================================================
@@ -162,16 +190,32 @@ class RegistrationSplit(BaseCrossValidator):
 def get_estimator():
     """Return a scikit-learn Pipeline for churn prediction.
 
-    The pipeline is trained on the feature columns of ``churn_train.csv``
-    (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    Only behavioral and subscription features are retained. The user ID,
+    registration date, target and cancellation event are excluded: the latter
+    reveals the outcome rather than predicting a future cancellation.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numerical = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded",
+    ]
+    numerical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    preprocessing = ColumnTransformer([
+        ("numerical", numerical_pipeline, numerical),
+        ("categorical", OneHotEncoder(handle_unknown="ignore"),
+         ["gender", "level"]),
+    ], remainder="drop")
+    return Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", LogisticRegression(max_iter=1000)),
+    ])
 
 
 # ============================================================
