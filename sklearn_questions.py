@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,29 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X:
+            raise ValueError("X must contain a registration_month column.")
+        dates = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError("registration_month must have datetime dtype.")
+        if dates.isna().any():
+            raise ValueError("registration_month must not contain missing dates.")
+        if y is None:
+            raise ValueError("y is required to check both classes in each fold.")
+        targets = np.asarray(y)
+        if targets.ndim != 1 or len(targets) != len(X):
+            raise ValueError("y must be one-dimensional with one label per row.")
+        if not np.isin(targets, [0, 1]).all():
+            raise ValueError("y must contain only binary labels 0 and 1.")
+
+        months = dates.dt.to_period("M")
+        for month in sorted(months.unique()):
+            # Use row positions, even when X has a non-default index.
+            train = np.flatnonzero(months.eq(month).to_numpy())
+            test = np.flatnonzero(months.eq(month + 1).to_numpy())
+            if (np.unique(targets[train]).size == 2
+                    and np.unique(targets[test]).size == 2):
+                yield train, test
 
 
 # ============================================================
@@ -170,8 +196,29 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_columns = ["gender", "level"]
+    numerical_columns = [
+        "total_events", "rate_songs", "rate_thumbs_up", "rate_thumbs_down",
+        "rate_errors", "n_sessions", "has_downgraded",
+    ]
+    categorical = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore")),
+    ])
+    numerical = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    # Exclude identifiers, dates, and cancellation-page visits: the last
+    # feature reveals the outcome rather than predicting future churn.
+    preprocessing = ColumnTransformer([
+        ("categorical", categorical, categorical_columns),
+        ("numerical", numerical, numerical_columns),
+    ], remainder="drop")
+    return Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", LogisticRegression(max_iter=1000, random_state=0)),
+    ])
 
 
 # ============================================================
