@@ -92,9 +92,13 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
-
+import numpy as np
 from sklearn.model_selection import BaseCrossValidator
-
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
 # ============================================================
 # Question 1
@@ -128,8 +132,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        n_splits = sum(1 for _ in self.split(X, y, groups))
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +156,22 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(X['registration_month']):
+            raise ValueError("registration_month must be of datetime dtype")
+        periods = X['registration_month'].dt.to_period('M')
+        unique_periods = sorted(periods.unique())
+        y_series = pd.Series(y).reset_index(drop=True)
+
+        for train_month, eval_month in zip(unique_periods[:-1], unique_periods[1:]):
+            idx_train = np.where(periods == train_month)[0]
+            idx_test = np.where(periods == eval_month)[0]
+
+            y_train = y_series.iloc[idx_train]
+            y_test = y_series.iloc[idx_test]
+
+            if (0 in y_train.values and 1 in y_train.values and
+                    0 in y_test.values and 1 in y_test.values):
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +189,32 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    numerical_features = ['rate_errors',
+                          'total_events',
+                          'rate_songs',
+                          'rate_thumbs_up',
+                          'rate_thumbs_down',
+                          'n_sessions',
+                          'has_downgraded']
+    categorical_features = ['gender','level']
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', SimpleImputer(strategy='mean'), numerical_features),
+            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+                # add drop='first' if using a linear model to avoid multicollinearity
+                # add sparse_output=False if passing data to a model that doesn't accept
+                #   sparse matrices (in other words, to force the encoder to return a
+                #   standard dense NumPy array instead of a sparse matrix)
+        ],
+        remainder='drop' # drops user_id, registration_month, and cancel_initiated
+    )
+    estimator = Pipeline([
+        ('transformer', preprocessor,),
+        ('classifier', RandomForestClassifier(random_state=42))
+    ])
+
+    return estimator
 
 
 # ============================================================
