@@ -92,8 +92,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import make_column_transformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,10 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        cpt = 0
+        for _, (_, _) in enumerate(self.split(X, y)):
+            cpt += 1
+        return cpt
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,9 +159,15 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
-
+        if not pd.api.types.is_datetime64_any_dtype( X["registration_month"]):
+            raise ValueError("registration_month column in training is not a datetime")
+        months = X["registration_month"].dt.to_period("M")
+        months_unique = sorted(months.unique())
+        for M in months_unique:
+            mask_train = (months == M)
+            mask_test = (months == M + 1)
+            if y[mask_train].nunique() == 2 and y[mask_test].nunique() == 2:
+                yield np.flatnonzero(mask_train), np.flatnonzero(mask_test)
 
 # ============================================================
 # Question 2
@@ -170,8 +184,22 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_columns = ["gender", "level"]
+    numerical_columns = ["total_events",
+                         "rate_songs",
+                         "rate_thumbs_up",
+                         "rate_thumbs_down",
+                         "rate_errors",
+                         "n_sessions",
+                         "has_downgraded"]
+
+    preprocessor = make_column_transformer(
+        (OneHotEncoder(handle_unknown="ignore"), categorical_columns),
+        (make_pipeline(SimpleImputer(strategy="median"), StandardScaler()),
+         numerical_columns)
+    )
+
+    return make_pipeline(preprocessor, LogisticRegression(max_iter=1000))
 
 
 # ============================================================
@@ -209,3 +237,4 @@ if __name__ == "__main__":
     scores = pd.DataFrame(scores)
     print(f"CV results : {scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
+
