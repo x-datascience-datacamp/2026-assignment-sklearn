@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,8 +134,10 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        count = 0
+        for train, test in self.split(X, y, groups):
+            count += 1
+        return count
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +159,30 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain a 'registration_month'")
+        dates = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError(
+                "registration_month must be of datetime dtype."
+            )
+        if y is None:
+            raise ValueError("y is required to build the folds.")
+
+        periods = dates.dt.to_period("M").to_numpy()
+        y = np.asarray(y)
+
+        for month in sorted(set(periods)):
+            train = np.flatnonzero(periods == month)
+            test = np.flatnonzero(periods == month + 1)
+            if len(train) == 0 or len(test) == 0:
+                continue
+            if (
+                np.unique(y[train]).size < 2
+                or np.unique(y[test]).size < 2
+            ):
+                continue
+            yield train, test
 
 
 # ============================================================
@@ -170,8 +200,68 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender",
+                        "level"]
+    numerical_cols = ["total_events",
+                      "rate_songs",
+                      "rate_thumbs_up",
+                      "rate_thumbs_down",
+                      "rate_errors",
+                      "n_sessions"]
+
+    cat_encoder = OneHotEncoder(handle_unknown="ignore")
+    num_encoder = Pipeline([("impute",
+                             SimpleImputer(strategy="median")
+                            ),
+                            ("scale",
+                             StandardScaler()
+                            )
+                           ]
+                          )
+
+    preprocessor = ColumnTransformer(transformers=[("categorical",
+                                                    cat_encoder,
+                                                    categorical_cols
+                                                    ),
+                                                   ("numerical",
+                                                    num_encoder,
+                                                    numerical_cols,
+                                                    )
+                                                   ],
+                                     remainder="drop"
+                                    )
+
+    full_pipeline = Pipeline([("preprocess",
+                               preprocessor),
+                              ("clf",
+                               LogisticRegression(max_iter=1000)
+                              )
+                             ]
+                            )
+
+    # # score = Test ROC-AUC: 0.7158
+    # full_pipeline = Pipeline([("preprocess",
+    #                                preprocessor),
+    #                           ("clf",
+    #                            GradientBoostingClassifier(n_estimators=50,
+    #                                                       max_depth=2,
+    #                                                       learning_rate=0.05)
+    #                           )
+    #                          ]
+    #                         )
+
+    # # Pass as well
+    # full_pipeline = Pipeline([("preprocess",
+    #                            preprocessor),
+    #                           ("clf",
+    #                            HistGradientBoostingClassifier(max_iter=100,
+#                                                               learning_rate=0.05,
+#                                                               max_depth=3,
+#                                                               random_state=0)
+    #                           )
+    #                          ]
+    #                         )
+    return full_pipeline
 
 
 # ============================================================
