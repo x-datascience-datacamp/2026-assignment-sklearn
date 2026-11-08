@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.linear_model import LogisticRegression
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -110,6 +116,70 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    @staticmethod
+    def _get_periods(X):
+        """Return the registration month of each sample as a monthly period.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Data containing a ``registration_month`` column.
+
+        Returns
+        -------
+        periods : pandas.Series
+            Monthly periods, indexed by position (0..n_samples-1).
+
+        Raises
+        ------
+        ValueError
+            If the column is missing or is not of datetime dtype.
+        """
+        if (
+            not hasattr(X, "columns")
+            or "registration_month" not in X.columns
+        ):
+            raise ValueError("X must have a 'registration_month' column.")
+        months = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(months):
+            raise ValueError(
+                "'registration_month' must be of datetime dtype."
+            )
+        return months.dt.to_period("M").reset_index(drop=True)
+
+    def _iter_folds(self, X, y=None):
+        """Yield the valid (train, test) index pairs.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Data containing a ``registration_month`` column.
+        y : array-like of shape (n_samples,), optional
+            Target values.  If given, folds whose train or test set does not
+            contain both classes are skipped.
+
+        Yields
+        ------
+        idx_train : ndarray
+            Training indices (users registered in month M).
+        idx_test : ndarray
+            Testing indices (users registered in month M+1).
+        """
+        periods = self._get_periods(X)
+        y = None if y is None else np.asarray(y)
+
+        for period in sorted(periods.unique()):
+            idx_train = np.flatnonzero(periods == period)
+            idx_test = np.flatnonzero(periods == period + 1)
+            if len(idx_train) == 0 or len(idx_test) == 0:
+                continue
+            if y is not None and (
+                len(np.unique(y[idx_train])) < 2
+                or len(np.unique(y[idx_test])) < 2
+            ):
+                continue
+            yield idx_train, idx_test
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +198,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self._iter_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +220,7 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._iter_folds(X, y)
 
 
 # ============================================================
@@ -164,15 +232,52 @@ def get_estimator():
 
     The pipeline is trained on the feature columns of ``churn_train.csv``
     (all columns except ``user_id``, ``registration_month``, and ``churn``).
+    ``cancel_initiated`` and ``has_downgraded`` are also left out: both
+    happen close to the churn itself, so they are not reliably available
+    at prediction time.
 
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical = ["gender", "level"]
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+    ]
 
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore"),
+                categorical,
+            ),
+            (
+                "num",
+                Pipeline(
+                    [
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                numerical,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 # ============================================================
 # Script to test the objects implemented in this file.
