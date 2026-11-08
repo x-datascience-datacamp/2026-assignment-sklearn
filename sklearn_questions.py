@@ -91,9 +91,14 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
-
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -128,17 +133,16 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
-    def split(self, X, y, groups=None):
+    def split(self, X, y=None, groups=None):
         """Generate indices to split data into training and test sets.
 
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
             Training data, must contain a ``registration_month`` column.
-        y : array-like of shape (n_samples,)
+        y : array-like of shape (n_samples,), optional
             Target values.  Used to filter out folds that do not contain
             both classes.
         groups : array-like of shape (n_samples,)
@@ -151,8 +155,35 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X:
+            raise ValueError(
+                "X must be a pandas DataFrame containing a "
+                "'registration_month' column."
+            )
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError(
+                "The 'registration_month' column must be of datetime dtype."
+            )
+
+        periods = X["registration_month"].dt.to_period("M")
+        unique_periods = sorted(periods.dropna().unique())
+
+        y_arr = np.asarray(y) if y is not None else None
+
+        for i in range(len(unique_periods) - 1):
+            m_tr = unique_periods[i]
+            m_te = unique_periods[i + 1]
+
+            idx_train = np.where(periods == m_tr)[0]
+            idx_test = np.where(periods == m_te)[0]
+
+            if y_arr is not None:
+                y_tr = y_arr[idx_train]
+                y_te = y_arr[idx_test]
+                if len(np.unique(y_tr)) < 2 or len(np.unique(y_te)) < 2:
+                    continue
+
+            yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +201,42 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_features = ["gender", "level"]
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = OneHotEncoder(
+        drop="if_binary", handle_unknown="ignore"
+    )
+    numerical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", categorical_transformer, categorical_features),
+            ("num", numerical_transformer, numerical_features),
+        ]
+    )
+
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(random_state=42, max_iter=1000)),
+        ]
+    )
+
+    return pipeline
 
 
 # ============================================================
