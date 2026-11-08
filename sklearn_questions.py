@@ -1,99 +1,11 @@
-"""Assignment - a sklearn Pipeline and CV splitter for churn prediction.
-
-Context
--------
-You are working with event-log data from a music streaming platform. Each row
-in the raw log is one user action (page visited, song played, ...). The goal
-is to predict which users will cancel their subscription (churn).
-
-The file ``data/churn_train.csv`` contains one row per user with aggregated
-features derived from the raw log:
-
-+-------------------+--------------------------------------------+
-| Column            | Description                                |
-+===================+============================================+
-| user_id           | Unique user identifier                     |
-+-------------------+--------------------------------------------+
-| gender            | M / F (categorical)                        |
-+-------------------+--------------------------------------------+
-| level             | Subscription tier: "free" / "paid"         |
-+-------------------+--------------------------------------------+
-| total_events      | log(1 + total number of events)            |
-+-------------------+--------------------------------------------+
-| rate_songs        | Fraction of events that are song plays     |
-+-------------------+--------------------------------------------+
-| rate_thumbs_up    | Fraction of events that are Thumbs-Up      |
-+-------------------+--------------------------------------------+
-| rate_thumbs_down  | Fraction of events that are Thumbs-Down    |
-+-------------------+--------------------------------------------+
-| rate_errors       | Fraction of events that are errors         |
-+-------------------+--------------------------------------------+
-| n_sessions        | Number of distinct sessions                |
-+-------------------+--------------------------------------------+
-| has_downgraded    | 1 if user ever requested a downgrade       |
-+-------------------+--------------------------------------------+
-| cancel_initiated  | 1 if user visited the cancellation page    |
-+-------------------+--------------------------------------------+
-| registration_month| Month the user registered (datetime)      |
-+-------------------+--------------------------------------------+
-| churn             | Target: 1 = churned, 0 = retained          |
-+-------------------+--------------------------------------------+
-
-Question 1 - RegistrationSplit
--------------------------------
-Implement ``RegistrationSplit``, a scikit-learn cross-validator that splits
-users by their ``registration_month`` column.
-
-Each fold trains on users who registered in month M and evaluates on users
-who registered in month M+1, simulating the production setting: you train on
-your existing user base and predict on the cohort that joined next.
-
-Only folds where *both* the training set and the test set contain at least one
-churner and one non-churner are generated (otherwise the fold is useless for
-evaluating churn prediction).
-
-We also ask you to respect the PEP 8 convention: https://pep8.org. This will
-be enforced with ``ruff``. You can check that there are no errors by calling
-``ruff check`` at the root of the repo.
-
-Finally, you need to write docstrings for the methods you code and for the
-class.
-
-
-Question 2 - get_estimator
---------------------------
-Implement ``get_estimator()`` so that it returns a scikit-learn ``Pipeline``
-that can be trained on the feature columns of ``churn_train.csv`` and predict
-churn on unseen users.
-
-Requirements:
-- The pipeline must contain a ``ColumnTransformer`` that handles categorical
-  columns (``gender``, ``level``) and numerical columns separately.
-- Handle missing values in numerical features (``rate_errors`` contains NaN).
-- End with a classifier of your choice.
-- Achieve a ROC-AUC of at least 0.72 on the held-out test set.
-
-Important: not every column should necessarily be used as a feature.
-Think carefully about which columns are truly available at prediction time.
-
-Hints
------
-- Q1 - ``pd.Series.dt.to_period('M')`` converts datetimes to year-month
-  periods that are easy to sort and compare.
-
-- Q1 - Remember to validate that ``registration_month`` is of datetime dtype
-  and raise a ``ValueError`` if not.
-
-- Q2 - Use ``sklearn.compose.ColumnTransformer`` together with
-  ``sklearn.preprocessing.OneHotEncoder`` (for categoricals) and
-  ``sklearn.impute.SimpleImputer`` (for numericals with NaN).
-
-- Q2 - Explore the data first with ``pandas`` before writing the pipeline.
-  Any feature that might be problematic/too correlated with the data?
-"""
+import numpy as np
 import pandas as pd
-
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 
 # ============================================================
@@ -128,8 +40,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +62,33 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        if not isinstance(X, pd.DataFrame) or "registration_month" not in X:
+            raise ValueError(
+                "X must be a pandas DataFrame containing 'registration_month'."
+            )
+
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("'registration_month' must be of datetime dtype.")
+
+        periods = X["registration_month"].dt.to_period("M")
+        unique_periods = sorted(periods.unique())
+        y_array = np.asarray(y)
+
+        for period in unique_periods:
+            m_train = period
+            m_test = period + 1
+
+            if m_test not in unique_periods:
+                continue
+
+            idx_train = np.where(periods == m_train)[0]
+            idx_test = np.where(periods == m_test)[0]
+
+            y_train = y_array[idx_train]
+            y_test = y_array[idx_test]
+
+            if len(np.unique(y_train)) > 1 and len(np.unique(y_test)) > 1:
+                yield idx_train, idx_test
 
 
 # ============================================================
@@ -170,8 +106,41 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    categorical_cols = ["gender", "level"]
+    numerical_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    numeric_transformer = Pipeline(
+        steps=[("imputer", SimpleImputer(strategy="mean"))]
+    )
+
+    categorical_transformer = Pipeline(
+        steps=[("onehot", OneHotEncoder(handle_unknown="ignore"))]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numerical_cols),
+            ("cat", categorical_transformer, categorical_cols),
+        ],
+        remainder="drop",
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", RandomForestClassifier(random_state=42)),
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
@@ -207,5 +176,5 @@ if __name__ == "__main__":
     print("\n=== Cross-validation with RegistrationSplit ===")
     scores = cross_validate(get_estimator(), X, y, cv=cv, scoring="roc_auc")
     scores = pd.DataFrame(scores)
-    print(f"CV results : {scores.round(3)}")
+    print(f"CV results : \n{scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
