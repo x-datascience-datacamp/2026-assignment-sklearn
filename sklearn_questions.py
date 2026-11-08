@@ -94,6 +94,11 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OrdinalEncoder,StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
 
 
 # ============================================================
@@ -129,7 +134,31 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+
+        n_splits = 0
+
+        try:
+            months = X["registration_month"].dt.to_period("M")
+        except AttributeError as err:
+            raise ValueError("registration_month must be a datetime column.") from err
+
+
+        for month in sorted(months.unique()):
+
+            #train_mask = X["registration_month"].dt.to_period('M') == month
+            #test_mask = X["registration_month"].dt.to_period('M') == month+1
+
+
+            y_month = y[months == month]
+            y_month_next  = y[months == month+1]
+
+            if len(y_month) == 0 or len(y_month_next) == 0:
+                continue
+
+            if y_month.nunique() == 2 and y_month_next.nunique() == 2:
+                n_splits += 1
+
+        return n_splits
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +181,23 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+
+        try:
+            months = X["registration_month"].dt.to_period("M")
+        except AttributeError as err:
+            raise ValueError("registration_month must be a datetime column.") from err
+
+        for month in sorted(months.unique()):
+
+            y_month = y[months == month]
+            y_month_next  = y[months == month+1]
+
+            if y_month.nunique() == 2 and y_month_next.nunique() == 2:
+
+                train_idx = y_month.index
+                test_idx = y_month_next.index
+
+                yield train_idx, test_idx
 
 
 # ============================================================
@@ -171,7 +216,39 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+
+
+    cat_cols = ["gender","level"]
+    num_cols = [
+        "total_events", "rate_songs", "rate_thumbs_up",
+        "rate_thumbs_down", "rate_errors", "n_sessions", "has_downgraded",
+    ]
+
+    cat_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy='constant', fill_value='missing')),
+        ("ordinal_encoder", OrdinalEncoder())
+    ])
+
+    num_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy='mean', fill_value='missing')),
+        ("scaler", StandardScaler())
+    ])
+
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", cat_pipeline, cat_cols),
+            ("num", num_pipeline, num_cols),
+        ],
+        remainder="drop",
+    )
+
+    model = Pipeline([
+        ("preprocessing", preprocessor),
+        ("classifier", LogisticRegression()),
+    ])
+
+
+    return model
 
 
 # ============================================================
@@ -187,6 +264,7 @@ if __name__ == "__main__":
     # Pass the full DataFrame (including registration_month) to the splitter.
     X = train.drop(columns=["churn"])
     y = train["churn"]
+
 
     # ---- inspect the folds produced by RegistrationSplit ----
     print("\n=== RegistrationSplit folds ===")
