@@ -94,6 +94,12 @@ Hints
 import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
+import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 
 # ============================================================
@@ -128,8 +134,9 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+
+        return sum(1 for _ in self.split(X, y, groups))
+
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +158,31 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+
+        if "registration_month" not in X.columns:
+            raise ValueError("Input DataFrame must contain a" \
+            "'registration_month' column.")
+        if not pd.api.types.is_datetime64_any_dtype(X["registration_month"]):
+            raise ValueError("The 'registration_month' column must" \
+            "be of datetime dtype.")
+        if y is None:
+            raise ValueError("Target values 'y' must be provided.")
+        y = np.asarray(y)
+        if len(y) != len(X):
+            raise ValueError("Length of target values 'y' must" \
+            "match number of samples in 'X'.")
+        periods = X["registration_month"].dt.to_period("M")
+        for month in np.sort(periods.dropna().unique()):
+            idx_train = (periods == month).to_numpy()
+            idx_test = (periods == month + 1).to_numpy()
+            if not idx_test.any():
+                continue
+            if (
+                len(np.unique(y[idx_train])) < 2
+                or len(np.unique(y[idx_test])) < 2
+            ):
+                continue
+            yield np.where(idx_train)[0], np.where(idx_test)[0]
 
 
 # ============================================================
@@ -170,8 +200,44 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+
+    categorical_features = ["gender", "level"]
+    # cancel_initiated is excluded: it is a leak (only known once the user is
+    # already cancelling), as are the identifier and registration columns.
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore"))
+        ]
+    )
+
+    numerical_transformer = SimpleImputer(strategy="median")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("cat", categorical_transformer, categorical_features),
+            ("num", numerical_transformer, numerical_features),
+        ]
+    )
+
+    estimator = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", HistGradientBoostingClassifier())
+        ]
+    )
+
+    return estimator
 
 
 # ============================================================
