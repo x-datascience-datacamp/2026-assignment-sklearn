@@ -91,9 +91,15 @@ Hints
 - Q2 - Explore the data first with ``pandas`` before writing the pipeline.
   Any feature that might be problematic/too correlated with the data?
 """
+import numpy as np
 import pandas as pd
 
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 # ============================================================
@@ -110,6 +116,43 @@ class RegistrationSplit(BaseCrossValidator):
     Only folds where both the training set and the test set contain at least
     one churner **and** one non-churner are generated.
     """
+
+    def _iter_folds(self, X, y=None):
+        """Yield the (train, test) indices of every valid fold.
+
+        Parameters
+        ----------
+        X : DataFrame
+            Data containing a ``registration_month`` datetime column.
+        y : array-like of shape (n_samples,), optional
+            Target values. If given, folds without both classes are skipped.
+
+        Yields
+        ------
+        idx_train, idx_test : ndarray of int
+            Positional indices of the train and test users.
+        """
+        reg = X["registration_month"]
+        if not pd.api.types.is_datetime64_any_dtype(reg):
+            raise ValueError(
+                "registration_month must be of datetime dtype."
+            )
+        months = reg.dt.to_period("M").to_numpy()
+        unique_months = sorted(set(months))
+        y_arr = None if y is None else np.asarray(y)
+
+        for month in unique_months:
+            next_month = month + 1
+            if next_month not in unique_months:
+                continue
+            idx_train = np.flatnonzero(months == month)
+            idx_test = np.flatnonzero(months == next_month)
+            if y_arr is not None:
+                if len(np.unique(y_arr[idx_train])) < 2:
+                    continue
+                if len(np.unique(y_arr[idx_test])) < 2:
+                    continue
+            yield idx_train, idx_test
 
     def get_n_splits(self, X, y=None, groups=None):
         """Return the number of valid splitting iterations.
@@ -128,8 +171,7 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self._iter_folds(X, y))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +193,7 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        yield from self._iter_folds(X, y)
 
 
 # ============================================================
@@ -165,13 +206,46 @@ def get_estimator():
     The pipeline is trained on the feature columns of ``churn_train.csv``
     (all columns except ``user_id``, ``registration_month``, and ``churn``).
 
+    ``cancel_initiated`` is deliberately left out: it leaks the target
+    (visiting the cancellation page happens right before churning) and is
+    not available for new users at prediction time.
+
     Returns
     -------
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    cat_cols = ["gender", "level"]
+    num_cols = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    preprocessor = ColumnTransformer(
+        [
+            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+            (
+                "num",
+                make_pipeline(
+                    SimpleImputer(strategy="median"), StandardScaler()
+                ),
+                num_cols,
+            ),
+        ],
+        remainder="drop",
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 # ============================================================
