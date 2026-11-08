@@ -1,3 +1,4 @@
+
 """Assignment - a sklearn Pipeline and CV splitter for churn prediction.
 
 Context
@@ -92,8 +93,14 @@ Hints
   Any feature that might be problematic/too correlated with the data?
 """
 import pandas as pd
+import numpy as np
 
 from sklearn.model_selection import BaseCrossValidator
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
 
 # ============================================================
@@ -129,7 +136,7 @@ class RegistrationSplit(BaseCrossValidator):
             The number of valid splits.
         """
         # Return the number of valid splits - TODO
-        ...
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -152,7 +159,29 @@ class RegistrationSplit(BaseCrossValidator):
             The testing set indices for that split.
         """
         # Split into monthly registration folds - TODO
-        ...
+        if not pd.api.types.is_datetime64_any_dtype(
+            X["registration_month"]
+        ):
+            raise ValueError("registration_month must be datetime")
+
+        months = X["registration_month"].dt.to_period("M")
+        unique_months = sorted(months.dropna().unique())
+        y = pd.Series(np.asarray(y))
+
+        for month in unique_months:
+            train_idx = np.where(months == month)[0]
+            test_idx = np.where(months == month + 1)[0]
+
+            if len(train_idx) == 0 or len(test_idx) == 0:
+                continue
+
+            if y.iloc[train_idx].nunique() < 2:
+                continue
+
+            if y.iloc[test_idx].nunique() < 2:
+                continue
+
+            yield train_idx, test_idx
 
 
 # ============================================================
@@ -171,7 +200,33 @@ def get_estimator():
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
     # TODO
-    ...
+    categorical = ["gender", "level"]
+
+    numerical = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded"
+    ]
+
+    preprocessing = ColumnTransformer([
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+        ("num", SimpleImputer(strategy="median"), numerical)
+    ])
+
+    model = Pipeline([
+        ("preprocessing", preprocessing),
+        ("classifier", RandomForestClassifier(
+            n_estimators=200,
+            min_samples_leaf=3,
+            random_state=42
+        ))
+    ])
+
+    return model
 
 
 # ============================================================
@@ -209,3 +264,4 @@ if __name__ == "__main__":
     scores = pd.DataFrame(scores)
     print(f"CV results : {scores.round(3)}")
     print(f"Mean CV AUC   : {scores['test_score'].mean():.3f}")
+
