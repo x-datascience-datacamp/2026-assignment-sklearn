@@ -95,7 +95,11 @@ import pandas as pd
 
 from sklearn.model_selection import BaseCrossValidator
 
-
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 # ============================================================
 # Question 1
 # ============================================================
@@ -128,8 +132,8 @@ class RegistrationSplit(BaseCrossValidator):
         n_splits : int
             The number of valid splits.
         """
-        # Return the number of valid splits - TODO
-        ...
+        """Return the number of valid splitting iterations."""
+        return sum(1 for _ in self.split(X, y, groups))
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test sets.
@@ -151,8 +155,43 @@ class RegistrationSplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
-        # Split into monthly registration folds - TODO
-        ...
+        # Split into monthly registration folds -
+        """Generate indices to split data into training and test sets."""
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a DataFrame.")
+
+        if "registration_month" not in X.columns:
+            raise ValueError("X must contain registration_month.")
+
+        dates = X["registration_month"]
+
+        if not pd.api.types.is_datetime64_any_dtype(dates):
+            raise ValueError("registration_month must have datetime dtype.")
+
+        if y is None:
+            raise ValueError("y must be provided.")
+
+        months = dates.dt.to_period("M").reset_index(drop=True)
+        targets = pd.Series(y).reset_index(drop=True)
+
+        unique_months = sorted(months.dropna().unique())
+
+        for month in unique_months:
+            next_month = month + 1
+
+            train_idx = (months == month).to_numpy().nonzero()[0]
+            test_idx = (months == next_month).to_numpy().nonzero()[0]
+
+            if len(test_idx) == 0:
+                continue
+
+            if targets.iloc[train_idx].nunique() < 2:
+                continue
+
+            if targets.iloc[test_idx].nunique() < 2:
+                continue
+
+            yield train_idx, test_idx
 
 
 # ============================================================
@@ -170,8 +209,56 @@ def get_estimator():
     estimator : sklearn.pipeline.Pipeline
         An unfitted pipeline ready to be used with ``fit`` / ``predict``.
     """
-    # TODO
-    ...
+    """Return a scikit-learn Pipeline for churn prediction."""
+
+    categorical_features = ["gender", "level"]
+
+    numerical_features = [
+        "total_events",
+        "rate_songs",
+        "rate_thumbs_up",
+        "rate_thumbs_down",
+        "rate_errors",
+        "n_sessions",
+        "has_downgraded",
+    ]
+
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    numerical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("categorical", categorical_transformer, categorical_features),
+            ("numerical", numerical_transformer, numerical_features),
+        ]
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            (
+                "classifier",
+                RandomForestClassifier(
+                    n_estimators=300,
+                    max_depth=5,
+                    min_samples_leaf=5,
+                    class_weight="balanced",
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
 
 
 # ============================================================
